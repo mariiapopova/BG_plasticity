@@ -4,6 +4,9 @@ Created on Tue Apr  6 14:09:29 2021
 
 @author: Maria
 """
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
 from initial import Initial
 import matplotlib.pyplot as plt
 from findfreq import *
@@ -12,7 +15,7 @@ import datetime
 import pickle
 import numpy as np
 
-n=300 #number of runs
+n=3 #number of runs
  
 name = "Data/data_%s.pckl" % datetime.datetime.now().strftime("%d-%m-%Y-%H-%M")
 file = open(name, 'wb')
