@@ -1,4 +1,3 @@
-
 #%%
 # choose device to do calculations on
 import os
@@ -13,6 +12,7 @@ import jax.numpy as jnp
 import diffrax
 import matplotlib.pyplot as plt
 
+#jax.config.update("jax_enable_x64", True)
 print(jax.devices())
 
 #%%
@@ -110,6 +110,7 @@ def Hinf(V):
 
 # defining the functions for ODEterm
 def gpe_rhs(t, y, args):
+    print("hello")
 
     V2, N2, H2, R2, C2, CA2, S2, \
     V3, N3, H3, R3, CA3, S3 = y
@@ -175,9 +176,9 @@ def gpe_rhs(t, y, args):
     dN2dt   = 0.75 * (n2 - N2) / tn2
     dH2dt   = 0.75 * (h2 - H2) / th2
     dR2dt   = 0.2 * (r2 - R2) / tr2
-    dCA2dt  = 3.75 * 1e-5 * (-Ica2 - It2 - kca[1] * CA2)
+    dCA2dt  = 3.75 * 1e-5 * (-Ica2 - It2 - kca[0] * CA2)
     dC2dt   = 0.08 * (c2 - C2) / tc2
-    dS2dt   = A[0]*(1-S2)*Hinf(V2-the[0])-B[0]*S2
+    dS2dt   = A[0]*(1-S2)*Hinf(V3-the[0])-B[0]*S2
 
     # currents gpe
     Il   = gl[1]  * (V3 - El[1])
@@ -185,7 +186,7 @@ def gpe_rhs(t, y, args):
     Ina3 = gna[1] * (m3**3) * H3   * (V3 - Ena[1])
     It3  = gt[1]  * (a3**3) * R3   * (V3 - Eca[1])
     Ica3 = gca[1] * (s3**2)       * (V3 - Eca[1])
-    Iahp3 = gahp[1] * (V3 - Ek[1]) * (CA3 / (CA3 + k1[1]))
+    Iahp3 = gahp[1] * (V2 - Ek[1]) * (CA3 / (CA3 + k1[1]))
 
     # applied current gpe
     Iappgpe = 9.5
@@ -222,12 +223,14 @@ R3_init  = stn_rinf(V3_init)
 CA3_init = 0.1
 S3_init  = 0.1 
 
-y0 = jnp.array([V2_init, N2_init, H2_init, R2_init, CA2_init, C2_init, S2_init,
+y0 = jnp.array([V2_init, N2_init, H2_init, R2_init, C2_init, CA2_init, S2_init,
                 V3_init, N3_init, H3_init, R3_init, CA3_init, S3_init])
 
 
+#gpe_rhs_jitted = jax.jit(gpe_rhs)
+#gpe_rhs_jitted(10, y0, params)
 
-def simulate_gpe(y0, params):
+def simulate_gpe(y0, params, ts, tmax, dt):
 
     term = diffrax.ODETerm(gpe_rhs)
     solver = diffrax.Tsit5()
@@ -242,22 +245,26 @@ def simulate_gpe(y0, params):
         y0=y0,
         args=params,
         saveat=diffrax.SaveAt(ts=ts),   # save at our time grid 
-        stepsize_controller=diffrax.PIDController(rtol=1e-4, atol=1e-6),
-        progress_meter=diffrax.TextProgressMeter(minimum_increase=0.05)
+        stepsize_controller=diffrax.PIDController(rtol=1e-5, atol=1e-7)
     )
 
 
     # sol.ys has shape (len(ts), 13)
     return ts, sol.ys
 
-#%% 
+#%% run simulation
+#simulate_gpe_jit = jax.jit(
+ #  simulate_gpe,
+  # static_argnames=("tmax", "dt"),   # scalars treated as compile-time constants
+#)
+
 # time scale
-tmax = 100000.0
+tmax = 5000.0
 dt = 0.1
 ts = jnp.arange(0.0, tmax, dt)
 
 #run
-ts, ys = simulate_gpe(y0, params)
+ts, ys = simulate_gpe(y0, params, ts, tmax, dt)
 V2 = ys[:, 0]
 V3 = ys[:, 7]
 
