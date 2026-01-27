@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import diffrax
 import matplotlib.pyplot as plt
 
+#jax.config.update("jax_enable_x64", True)
 print(jax.devices())
 
 #%%
@@ -437,7 +438,7 @@ def run_chunk(y0, params, t0, t1, dt0, dt_save ):
     return ts, sol.ys, yT
 
 
-run_chunk_jit = jax.jit(run_chunk, static_argnames=("dt0", "dt_save"))
+#run_chunk_jit = jax.jit(run_chunk, static_argnames=("dt0", "dt_save"))
 
 
 def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
@@ -449,25 +450,35 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
     # what we want to save, e.g. only V2 (of stn)
     # saved at ts (time scale with dt_save)
     all_ts = []
-    all_V2 = []  
+    all_V1 = []
+    all_V2 = []
+    all_V3 = []
+    all_V4 = []
 
     # looping across chunks 
-    # using jit compilation inside each chunk (run_chunk_jit)
+    # using jit compilation inside each chunk (run_chunk)
     while t0 < tmax:
         t1 = jnp.minimum(t0 + chunk_size, tmax)
-        ts, ys, y = run_chunk_jit(y, params, t0, t1, dt0, dt_save)
+        ts, ys, y = run_chunk(y, params, t0, t1, dt0, dt_save)
 
         all_ts.append(ts)
-        all_V2.append(ys["V1_th"])   # shape (len(ts), n_th)
-
+        all_V1.append(ys["V1_th"])
+        all_V2.append(ys["V2_stn"])   # shape (len(ts), n_th)
+        all_V3.append(ys["V3_gpe"])
+        all_V4.append(ys["V4_gpi"])
         t0 = float(t1)
 
-    return jnp.concatenate(all_ts), jnp.concatenate(all_V2)
+    return jnp.concatenate(all_ts), jnp.concatenate(all_V1), jnp.concatenate(all_V2), jnp.concatenate(all_V3), jnp.concatenate(all_V4)
 
 
 
 #%% run simulation
+tmax = 10000.0
+chunk_size = 1000.0      # 1 second per chunk
+dt0 = 0.1
+dt_save = 1.0            # save every 1 ms
 
+ts, V1, V2, V3, V4 = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
 
 #%%
 # plot to check
@@ -477,19 +488,21 @@ plt.ylabel("V (mV)")
 plt.show()
 
 # plot to check
-plt.plot(ts, V2[:,3])
+plt.plot(ts, V2[:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
 
 # plot to check
-plt.plot(ts, V3[:,1])
+plt.plot(ts, V3[:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
+
 
 # plot to check
 plt.plot(ts, V4[:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
+# %%
