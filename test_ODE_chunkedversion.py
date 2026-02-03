@@ -34,25 +34,32 @@ params = {
     "gk": jnp.array([5, 45, 30, 30]),  "Ek": jnp.array([-75, -80, -80, -95]),
     "gt": jnp.array([5, 0.5, 0.5, 0.5]), "Et":0,
     "gca": jnp.array([0, 2, 0.15, 0.15]), "Eca": jnp.array([0, 140, 120, 120]),
-    "gahp": jnp.array([0, 10, 10, 12]),
-    "k1": jnp.array([0, 20, 10, 15]),
+    "gahp": jnp.array([0, 10, 10, 10]),
+    "k1": jnp.array([0, 20, 10, 10]),
     "kca": jnp.array([0, 15, 15, 15]),
     
-    # synapse params
-    # in order of Igesn,Isnge, Igith, Isngi, Igegi
-    "A": jnp.array([0.2, 0.2, 0.2, 0.5, 0.6]),
-    "B": jnp.array([0.1, 0.1, 0.04, 0.08, 0.1]),
-    "the": jnp.array([0, 30, 20, 20, 30]),
-    "gsyn": jnp.array([1.0, 0.3, 0.5, 0.3, 1]),
-    "Esyn": jnp.array([-85, -85, 0, -85, 0]),
+    # synapse params (Rubin, 2004)
+    # in order of Igith, Igesn,Isnge, Igegi, Isngi, Igege
+    "A": jnp.array([2.0 , 3.0 , 2.0, 3.0, 2.0, 3.0]),
+    "B": jnp.array([0.08, 0.1, 0.04, 0.1, 0.08, 0.1]),
+    "the": jnp.array([20, 30, 20, 30, 0, 30]),
+    "gsyn": jnp.array([0.06, 0.9, 0.3, 1, 0.3, 1]),
+    "Esyn": jnp.array([-85, -100, 0, -100, 0, -100]),
     "tau": 5, "gpeak1": 0.3, "gpeak": 0.43,
 
     # connectivity matrix
-    "w_gpe_stn": jnp.ones((n_stn, n_gpe)),
-    "w_stn_gpe": jnp.ones((n_gpe, n_stn)),
-    "w_gpi_th": jnp.ones((n_th, n_gpi)),
-    "w_gpe_gpi": jnp.ones((n_gpi, n_gpe)),
-    "w_stn_gpi": jnp.ones((n_gpi, n_stn))
+    # 1 : 1 connectivity
+    "w_gpe_stn": jnp.eye(n_stn, n_gpe),
+    "w_stn_gpe": jnp.eye(n_gpe, n_stn),
+    "w_gpi_th":  jnp.eye(n_th, n_gpi),
+    "w_gpe_gpi": jnp.eye(n_gpi, n_gpe),
+    "w_stn_gpi": jnp.eye(n_gpi, n_stn),
+    # 2 : 1 connectivity for self-inhibtion
+    "w_gpe_gpe": jnp.array([
+        [0,1,1,0],
+        [0,0,1,1],
+        [1,0,0,1],
+        [1,1,0,0],], dtype=jnp.float32)
 }
 
 # gating variable functions
@@ -138,8 +145,8 @@ def th_hinf(V):
     return 1/(1+jnp.exp((V+41)/4))
 
 # synapses
-def Hinf(V):
-    return 1/(1+jnp.exp(-(V+57)/2))
+def Hinf(V, theta):
+    return 1/(1+jnp.exp(-(V - theta)/2))
 
 # defining the functions for ODEterm
 def gpe_rhs(t, y, args):
@@ -166,7 +173,8 @@ def gpe_rhs(t, y, args):
     H3  = y["H3_gpe"]
     R3  = y["R3_gpe"]
     CA3 = y["CA3_gpe"]
-    S3  = y["S3_gpe"]
+    S3_1  = y["S3_1_gpe"]
+    S3_2  = y["S3_2_gpe"]
 
     #GPi
     V4  = y["V4_gpi"]   
@@ -197,6 +205,7 @@ def gpe_rhs(t, y, args):
     w_gpi_th = params["w_gpi_th"]
     w_gpe_gpi = params["w_gpe_gpi"]
     w_stn_gpi = params["w_stn_gpi"]
+    w_gpe_gpe = params["w_gpe_gpe"] 
 
 
     # gating steady states & taus from V
@@ -258,7 +267,7 @@ def gpe_rhs(t, y, args):
     Iahp2 = gahp[1] * (V2 - Ek[1]) * (CA2 / (CA2 + k1[1]))
 
     # applied current stn    
-    Iappstn = 55.0
+    Iappstn = 25.0
 
     # currents gpe
     Il3  = gl[2]  * (V3 - El[2])
@@ -269,7 +278,7 @@ def gpe_rhs(t, y, args):
     Iahp3 = gahp[2] * (V3 - Ek[2]) * (CA3 / (CA3 + k1[2]))
 
     # applied current gpe
-    Iappgpe = 9.5
+    Iappgpe = 2.0
 
     # currents gpi
     Il4  = gl[3]  * (V4 - El[3])
@@ -280,42 +289,45 @@ def gpe_rhs(t, y, args):
     Iahp4 = gahp[3] * (V4 - Ek[3]) * (CA4 / (CA4 + k1[3]))
 
     # applied current gpi
-    Iappgpi = 12.5
+    Iappgpi = 5.0
 
 
     # synapses with connectivity matrices
 
     # presynaptic activation
-    H_gpe = Hinf(V3 - the[1])
-    H_stn = Hinf(V2 - the[2])
-    H_gpi = Hinf(V4 - the[3])
+    H_gpe = Hinf(V3, theta=30.0)
+    H_stn = Hinf(V2, theta=20.0)
+    H_gpi = Hinf(V4, theta=20.0)
 
-
-    # GPe to STN: weighted sum of GPe activity into each STN neuron
+    # GPe to STN: 1 GPe to 1 STN
     drive_stn = w_gpe_stn @ H_gpe
-    # STN to GPe: weighted sum of STN activity into each GPe neuron
-    drive_gpe = w_stn_gpe @ H_stn
-    # GPe - GPi: weighted sum of GPe activity into each GPi neuron
+    # STN to GPe: 1 STN to 1 GPe
+    drive_gpe1 = w_stn_gpe @ H_stn
+    # GPe - GPi: 1 GPe to 1 GPi
     drive_gpi1 = w_gpe_gpi @ H_gpe
-    # STN to GPi: weighted sum of STN activity into each GPi neuron
+    # STN to GPi: 1 STN to 1 GPi
     drive_gpi2 = w_stn_gpi @ H_stn
-    # GPi - TH: weighted sum of GPe activity into each TH neuron
+    # GPi - TH: 1 GPe to 1 TH
     drive_th = w_gpi_th @ H_gpi
+    # GPe - GPe: 1 GPe to 1 GPe
+    drive_gpe2 = w_gpe_gpe @ H_gpe
 
 
     # differential equations synapses
     dS1dt = A[0] * (1 - S1) * drive_th - B[0] * S1
     dS2dt = A[1] * (1 - S2) * drive_stn - B[1] * S2
-    dS3dt = A[2] * (1 - S3) * drive_gpe  - B[2] * S3
+    dS31dt = A[2] * (1 - S3_1) * drive_gpe1  - B[2] * S3_1
+    dS32dt = A[5] * (1 - S3_2) * drive_gpe2  - B[5] * S3_2
     dS41dt = A[3] * (1 - S4_1) * drive_gpi1  - B[3] * S4_1
     dS42dt = A[4] * (1 - S4_2) * drive_gpi2  - B[4] * S4_2
 
     # synaptic currents using those gating variables
     Igesn = 0.5 * (gsyn[1] * (V2 - Esyn[1]) *  S2)
-    Isnge = 0.5 * (gsyn[2] * (V3 - Esyn[2]) *  S3)
-    Isngi = 0.5 * (gsyn[3] * (V4 - Esyn[3]) *  S4_1)
-    Igegi = 0.5 * (gsyn[4] * (V4 - Esyn[4]) *  S4_2)
+    Isnge = 0.5 * (gsyn[2] * (V3 - Esyn[2]) *  S3_1)
+    Isngi = 0.5 * (gsyn[3] * (V4 - Esyn[3]) *  S4_2)
+    Igegi = 0.5 * (gsyn[4] * (V4 - Esyn[4]) *  S4_1)
     Igith = 0.5 * (gsyn[0] * (V1 - Esyn[0]) *  S1)
+    Igege = 0.5 * (gsyn[5] * (V3 - Esyn[5]) *  S3_2)
 
 
     # differential equations th
@@ -332,7 +344,7 @@ def gpe_rhs(t, y, args):
     dC2dt   = 0.08 * (c2 - C2) / tc2
 
     # differential equations gpe
-    dV3dt  = (-Il3 - Ik3 - Ina3 - It3 - Ica3 - Iahp3 - Isnge + Iappgpe) / Cm
+    dV3dt  = (-Il3 - Ik3 - Ina3 - It3 - Ica3 - Iahp3 - Isnge - Igege + Iappgpe) / Cm
     dN3dt  = 0.1  * (n3 - N3) / tn3
     dH3dt  = 0.05 * (h3 - H3) / th3
     dR3dt  = 1.0  * (r3 - R3) / tr3
@@ -365,7 +377,8 @@ def gpe_rhs(t, y, args):
         "H3_gpe":  dH3dt,
         "R3_gpe":  dR3dt,
         "CA3_gpe": dCA3dt,
-        "S3_gpe":  dS3dt,
+        "S3_1_gpe":  dS31dt,
+        "S3_2_gpe":  dS32dt,
 
         "V4_gpi":  dV4dt,
         "N4_gpi":  dN4dt,
@@ -402,7 +415,8 @@ y0 = {
     "H3_gpe":  gpe_hinf(V3_init)  * jnp.ones((n_gpe,)),
     "R3_gpe":  gpe_rinf(V3_init)  * jnp.ones((n_gpe,)),
     "CA3_gpe": jnp.full((n_gpe,), 0.1),
-    "S3_gpe":  jnp.full((n_gpe,), 0.1),
+    "S3_1_gpe":  jnp.full((n_gpe,), 0.1),
+    "S3_2_gpe":  jnp.full((n_gpe,), 0.1),
 
     "V4_gpi":  jnp.full((n_gpi,), V4_init),
     "N4_gpi":  gpe_ninf(V4_init)  * jnp.ones((n_gpi,)),  
@@ -473,8 +487,8 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
 
 
 #%% run simulation
-tmax = 10000.0
-chunk_size = 1000.0      # 1 second per chunk
+tmax = 1000.0
+chunk_size = 100.0      # 1 second per chunk
 dt0 = 0.1
 dt_save = 1.0            # save every 1 ms
 
@@ -488,7 +502,7 @@ plt.ylabel("V (mV)")
 plt.show()
 
 # plot to check
-plt.plot(ts, V2[:,1])
+plt.plot(ts, V2[:,2])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
