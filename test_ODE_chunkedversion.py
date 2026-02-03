@@ -183,7 +183,17 @@ def gpe_rhs(t, y, args):
     R4  = y["R4_gpi"]
     CA4 = y["CA4_gpi"]
     S4_1  = y["S4_1_gpi"]   
-    S4_2  = y["S4_2_gpi"] 
+    S4_2  = y["S4_2_gpi"]
+
+    # STR direct and indirect
+    V5d  = y["V5d_str"]   
+    V5i  = y["V5i_str"]  
+    N5  = y["N2_stn"]
+    H5  = y["H2_stn"]
+    R5  = y["R2_stn"]
+    C5  = y["C2_stn"]
+    CA5 = y["CA2_stn"]
+    S5  = y["S2_stn"]
 
     Cm   = params["Cm"]
     gl   = params["gl"];  El   = params["El"]

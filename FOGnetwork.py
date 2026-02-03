@@ -36,15 +36,15 @@ def FOGnetwork(pd,stim,freq,Istim, timespike, tmax, dt, v1, v2, v3, v4, v7, n, s
     gk=np.array([5, 45, 30, 3.2, 80, 10, 20]); Ek=np.array([-75, -80, -80, -95, -100, -95, -72])
     gt=np.array([5, 0.5, 0.5]); Et=0
     gca=np.array([0, 2, 0.15]); Eca=np.array([0, 140, 120])
-    gahp=np.array([0, 20, 10]) #eahp and ek are the same excluding th
+    gahp=np.array([0, 10, 10]) #eahp and ek are the same excluding th
     gcort=0.15; Ecort=0      #cortex par for ppn
     Bcort=1 #ms^-1
     gm=1; Em=-100 #for striatum muscarinic current
     #stn coupling 
     gc1=0.1; gc2=0.1
     
-    k1=np.array([0, 15, 10])    #dissociation const of ahp current 
-    kca=np.array([0, 22.5, 15]) #calcium pump rate constant
+    k1=np.array([0, 20, 10])    #dissociation const of ahp current 
+    kca=np.array([0, 15, 15]) #calcium pump rate constant
 
     #synapse params alike in rubin SNr same to Gpi, Str same to Gpi
     A=np.array([0, 3, 2, 2, 3, 2, 2, 3, 3, 3, 2, 3]) 
