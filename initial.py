@@ -18,7 +18,7 @@ def Initial():
     #%% Set initial conditions
     
     #time variables
-    tmax=1000              #maximum time (ms)
+    tmax=10000              #maximum time (ms)
     dt=0.01                #timestep (ms)
     t=np.arange(0,tmax,dt) #time vector
     n=12                   #number of neurons in each nucleus (TH, STN, GPe, GPi)

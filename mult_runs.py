@@ -15,7 +15,7 @@ import datetime
 import pickle
 import numpy as np
 
-n=3 #number of runs
+n=1 #number of runs
  
 name = "Data/data_%s.pckl" % datetime.datetime.now().strftime("%d-%m-%Y-%H-%M")
 file = open(name, 'wb')
