@@ -28,6 +28,67 @@ n_gpi = 4
 
 # parameters in a dict (PyTree)
 params = {
+    #pd switch
+    "pd": 0,
+    # membrane params
+    # in order of TH, STN, GPe, GPi
+    "Cm": 1.0,
+    "gl": jnp.array([0.05, 2.25, 0.1, 0.1]),  "El": jnp.array([-70, -60.0, -65.0, -65.0]),
+    "gna": jnp.array([3, 37, 120, 120]), "Ena": jnp.array([50, 55, 55, 55]),
+    "gk": jnp.array([5, 45, 30, 30]),  "Ek": jnp.array([-75, -80, -80, -80]),
+    "gt": jnp.array([5, 0.5, 0.5, 0.5]), "Et":0,
+    "gca": jnp.array([0, 2, 0.15, 0.15]), "Eca": jnp.array([0, 140, 120, 120]),
+    "gahp": jnp.array([0, 20, 10, 10]),
+    "k1": jnp.array([0, 15, 10, 10]),
+    "kca": jnp.array([0, 22.5, 15, 15]),
+    
+    # synapse params (Rubin, 2004)
+    # in order of Igith, Igesn,Isnge, Igege, Igegi, Isngi
+    "A": jnp.array([2.0 , 2.0 , 3.0, 2.0, 2.0, 3.0]),
+    "B": jnp.array([0.04, 0.04, 0.1, 0.04, 0.04, 0.1]),
+    "the": jnp.array([20, 20, 30, 20, 20, 30]),
+    "gsyn": jnp.array([0.08, 1, 0.3, 1, 1, 0.3]),
+    "Esyn": jnp.array([-85, -85, 0, -85, -85, 0]),
+    "tau": 5, "gpeak1": 0.3, "gpeak": 0.43, #where does this go
+
+    # connectivity matrix
+    # 1 : 1 connectivity
+    #"w_gpe_stn": jnp.eye(n_stn, n_gpe),
+    #"w_stn_gpe": jnp.eye(n_gpe, n_stn),
+    "w_gpi_th":  jnp.eye(n_th, n_gpi),
+    #"w_gpe_gpi": jnp.eye(n_gpi, n_gpe),
+    #"w_stn_gpi": jnp.eye(n_gpi, n_stn),
+    # 2 : 1 connectivity for self-inhibtion
+    "w_stn_gpe": jnp.array([
+        [1,1,0,0],
+        [0,1,1,0],
+        [0,0,1,1],
+        [1,0,0,1],], dtype=jnp.float64),
+    "w_stn_gpi": jnp.array([
+        [1,1,0,0],
+        [0,1,1,0],
+        [0,0,1,1],
+        [1,0,0,1],], dtype=jnp.float64),
+    "w_gpe_stn": jnp.array([
+        [1,0,0,1],
+        [1,1,0,0],
+        [0,1,1,0],
+        [0,0,1,1],], dtype=jnp.float64),
+    "w_gpe_gpi": jnp.array([
+        [0,0,1,1],
+        [1,0,0,1],
+        [1,1,0,0],
+        [0,1,1,0],], dtype=jnp.float64),
+    "w_gpe_gpe": jnp.array([
+        [0,0,1,1],
+        [1,0,0,1],
+        [1,1,0,0],
+        [0,1,1,0],], dtype=jnp.float64)
+}
+
+params_pd = {
+    #pd switch
+    "pd": 1,
     # membrane params
     # in order of TH, STN, GPe, GPi
     "Cm": 1.0,
@@ -170,6 +231,9 @@ def th_hinf(V):
 def Hinf(V, theta):
     return 1/(1+jnp.exp(-(V - theta + 57)/2))
 
+# def Hinf1(V):
+#     return 1/(1+jnp.exp(-(V + 57)/2))
+
 # defining the functions for ODEterm
 def gpe_rhs(t, y, args):
     params = args
@@ -241,6 +305,8 @@ def gpe_rhs(t, y, args):
     gpeak1 = params["gpeak1"]
     tau = params["tau"]
 
+    pd = params["pd"]
+
 
     # gating steady states & taus from V
     r1   = th_rinf(V1)
@@ -290,7 +356,7 @@ def gpe_rhs(t, y, args):
     It1  = gt[0]  * (p1**2) * R1 * (V1 - Et)
 
     # as Istim from og script (change later to input from motor cortex)
-    Iapp_th = 0.0
+    Iapp_th = 1.7
 
     # ion currents stn
     Il2   = gl[1]   * (V2 - El[1])
@@ -301,7 +367,7 @@ def gpe_rhs(t, y, args):
     Iahp2 = gahp[1] * (V2 - Ek[1]) * (CA2 / (CA2 + k1[1]))
 
     # applied current stn    
-    Iappstn = 35.0
+    Iappstn = 35.0 #35
 
     # currents gpe
     Il3  = gl[2]  * (V3 - El[2])
@@ -312,7 +378,7 @@ def gpe_rhs(t, y, args):
     Iahp3 = gahp[2] * (V3 - Ek[2]) * (CA3 / (CA3 + k1[2]))
 
     # applied current gpe
-    Iappgpe = 12.5
+    Iappgpe = 15-6*pd #15
 
     # currents gpi
     Il4  = gl[3]  * (V4 - El[3])
@@ -323,12 +389,13 @@ def gpe_rhs(t, y, args):
     Iahp4 = gahp[3] * (V4 - Ek[3]) * (CA4 / (CA4 + k1[3]))
 
     # applied current gpi
-    Iappgpi = 13.5
+    Iappgpi = 15 #15
 
 
     # synapses with connectivity matrices
 
     # presynaptic activation
+    #H_gpe = Hinf1(V3-20) #why not 57 everywhere
     H_gpe = Hinf(V3, theta=20.0) #why not 57 everywhere
     H_stn = Hinf(V2, theta=30.0)
     H_gpi = Hinf(V4, theta=20.0)
@@ -336,7 +403,7 @@ def gpe_rhs(t, y, args):
     # # GPe to STN: 1 GPe to 1 STN
     # drive_stn = w_gpe_stn @ H_gpe
     # # STN to GPe: 1 STN to 1 GPe
-    # drive_gpe1 = w_stn_gpe @ H_stn
+    #drive_gpe = w_stn_gpe @ H_stn
     # # GPe - GPi: 1 GPe to 1 GPi
     # drive_gpi1 = w_gpe_gpi @ H_gpe
     # # STN to GPi: 1 STN to 1 GPi
@@ -363,12 +430,12 @@ def gpe_rhs(t, y, args):
     # dS42dt = A[5] * (1 - S4_2) * H_stn - B[5] * S4_2
 
     # synaptic currents using those gating variables
-    Igith = 1.4 * w_gpi_th @ (gsyn[0] * (V4 - Esyn[0]) *  S4)
-    Igesn = 0.5 * w_gpe_stn  @  (gsyn[1] * (V3 - Esyn[1]) *  S3)
-    Isnge = 0.5 * w_stn_gpe  @  (gsyn[2] * (V2 - Esyn[2]) *  S2)
-    Igege = 0.5 * w_gpe_gpe  @  (gsyn[3] * (V3 - Esyn[3]) *  S3)
-    Igegi = 0.5 * w_gpe_gpi  @  (gsyn[4] * (V3 - Esyn[4]) *  S3)
-    Isngi = 0.5 * w_stn_gpi  @  (gsyn[5] * (V2 - Esyn[5]) *  S2)
+    Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4))
+    Igesn = 0.5 * (gsyn[1] * (V2 - Esyn[1]) * (w_gpe_stn @ S3))
+    Isnge = 0.5 *  (gsyn[2] * (V3 - Esyn[2]) * ( w_stn_gpe  @ S2))
+    Igege = 0.5 *  (gsyn[3] * (V3 - Esyn[3]) *  (w_gpe_gpe @ S3))
+    Igegi = 0.5 *   (gsyn[4] * (V4 - Esyn[4]) *  (w_gpe_gpi @ S3))
+    Isngi = 0.5 *   (gsyn[5] * (V4 - Esyn[5]) *  (w_stn_gpi  @S2))
     
 
 
@@ -382,7 +449,7 @@ def gpe_rhs(t, y, args):
     dN2dt   = 0.75 * (n2 - N2) / tn2
     dH2dt   = 0.75 * (h2 - H2) / th2
     dR2dt   = 0.2 * (r2 - R2) / tr2
-    dCA2dt  = 3.75 * 1e-5 * (-Ica2 - It2 - kca[0] * CA2)
+    dCA2dt  = 3.75 * 1e-5 * (-Ica2 - It2 - kca[1] * CA2)
     dC2dt   = 0.08 * (c2 - C2) / tc2
 
     # differential equations gpe
@@ -390,14 +457,14 @@ def gpe_rhs(t, y, args):
     dN3dt  = 0.1  * (n3 - N3) / tn3
     dH3dt  = 0.05 * (h3 - H3) / th3
     dR3dt  = 1.0  * (r3 - R3) / tr3
-    dCA3dt = 1e-4 * (-Ica3 - It3 - kca[1] * CA3)
+    dCA3dt = 1e-4 * (-Ica3 - It3 - kca[2] * CA3)
 
     # differential equations gpi
     dV4dt  = (-Il4 - Ik4 - Ina4 - It4 - Ica4 - Iahp4 - Igegi - Isngi + Iappgpi) / Cm
     dN4dt  = 0.1  * (n4 - N4) / tn4
     dH4dt  = 0.05 * (h4 - H4) / th4
     dR4dt  = 1.0  * (r4 - R4) / tr4
-    dCA4dt = 1e-4 * (-Ica4 - It4 - kca[2] * CA4)
+    dCA4dt = 1e-4 * (-Ica4 - It4 - kca[3] * CA4)
     
 
     return {
@@ -607,29 +674,30 @@ dt0 = 0.1
 dt_save = 1           # save every 1 ms
 
 ts, V1, V2, V3, V4 = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
+ts_pd, V1_pd, V2_pd, V3_pd, V4_pd = simulate_chunked(y0, params_pd, tmax, chunk_size, dt0, dt_save)
 
 #%%
 # plot to check
-plt.plot(ts, V1[:,3])
+plt.plot(ts, V1[:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
 
 # plot to check
-plt.plot(ts, V2[:,2])
+plt.plot(ts, V2[:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
 
 # plot to check
-plt.plot(ts, V3[:,3])
+plt.plot(ts, V3[:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
 
 
 # plot to check
-plt.plot(ts, V4[:,1])
+plt.plot(ts, V4[:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
@@ -649,3 +717,56 @@ def findfreq(sig): #in Hz
 print("STN FR:", findfreq(V2[:,2]))
 print("GPe FR:", findfreq(V3[:,3]))
 print("GPi FR:", findfreq(V4[:,1]))
+
+#%% fourier transform
+
+sig2 = V2[:,0]
+fft_res2 = np.abs(np.fft.rfft(np.fft.ifftshift(sig2-np.mean(sig2))))
+ff_freqs2 = np.fft.rfftfreq(n= 10000,d = 1e-4)
+
+sig2_pd = V2_pd[:,0]
+fft_res2_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig2_pd-np.mean(sig2_pd))))
+ff_freqs2_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
+
+sig3 = V3[:,0]
+fft_res3 = np.abs(np.fft.rfft(np.fft.ifftshift(sig3-np.mean(sig3))))
+ff_freqs3 = np.fft.rfftfreq(n= 10000,d = 1e-4)
+
+sig3_pd = V3_pd[:,0]
+fft_res3_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig3_pd-np.mean(sig3_pd))))
+ff_freqs3_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
+
+sig4 = V4[:,0]
+fft_res4 = np.abs(np.fft.rfft(np.fft.ifftshift(sig4-np.mean(sig4))))
+ff_freqs4 = np.fft.rfftfreq(n= 10000,d = 1e-4)
+
+sig4_pd = V4_pd[:,0]
+fft_res4_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig4_pd-np.mean(sig4_pd))))
+ff_freqs4_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
+
+plt.figure(figsize=(15,8))
+plt.plot(ff_freqs2[:50],fft_res2[:50],label='Healthy')
+plt.plot(ff_freqs2_pd[:50],fft_res2_pd[:50],label='PD')
+plt.ylabel('Amplitude [a.u.]')
+plt.xlabel('Frequency [Hz]')
+plt.legend()
+plt.title('Mean STN psd')
+plt.show()
+
+plt.figure(figsize=(15,8))
+plt.plot(ff_freqs3[:50],fft_res3[:50],label='Healthy')
+plt.plot(ff_freqs3_pd[:50],fft_res3_pd[:50],label='PD')
+plt.ylabel('Amplitude [a.u.]')
+plt.xlabel('Frequency [Hz]')
+plt.legend()
+plt.title('Mean GPe psd')
+plt.show()
+
+plt.figure(figsize=(15,8))
+plt.plot(ff_freqs4[:50],fft_res4[:50],label='Healthy')
+plt.plot(ff_freqs4_pd[:50],fft_res4_pd[:50],label='PD')
+plt.ylabel('Amplitude [a.u.]')
+plt.xlabel('Frequency [Hz]')
+plt.legend()
+plt.title('Mean GPi psd')
+plt.show()
