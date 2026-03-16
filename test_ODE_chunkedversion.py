@@ -12,6 +12,7 @@ from jax import random
 import jax.numpy as jnp
 import diffrax
 import matplotlib.pyplot as plt
+from additional_functions import *
 
 #jax.config.update("jax_enable_x64", True)
 print(jax.devices())
@@ -25,24 +26,48 @@ n_gpe = 4
 n_gpi = 4
 n_dstr = 4
 n_istr = 4
+n_ctx_fsi = 2
+n_ctx_pyr = 20
 
 # pd (pd = 1) or healthy (pd = 0)
-pd = 1
+pd = 0
+
+DA = 0.9 # healthy
+DA_pd = 0.1
+
+# dopamine scaling from CTX to Str
+def cD1(DA, AD1=10.0, lambda_str=7.5):
+    return AD1 / (1.0 + jnp.exp(-lambda_str * (DA - 1.0)))
+
+# STDP threshold 
+def spike_event(V, threshold):
+    return (V > threshold).astype(V.dtype)
+
 
 # parameters in a dict (PyTree)
 params = {
     # membrane params
-    # in order of TH, STN, GPe, GPi, Str
+    # in order of TH, STN, GPe, GPi, Str, CTX (PYR), CTX (FSI) (1e-5, 0.00015)
     "Cm": 1.0,
-    "gl": jnp.array([0.05, 2.25, 0.1, 0.1, 0.1]),  "El": jnp.array([-70, -60.0, -65.0, -65.0, -67.0]),
-    "gna": jnp.array([3, 37, 120, 120, 100]), "Ena": jnp.array([50, 55, 55, 55, 50]),
-    "gk": jnp.array([5, 45, 30, 30, 80]),  "Ek": jnp.array([-75, -80, -80, -80, -100]),
+    "gl": jnp.array([0.05, 2.25, 0.1, 0.1, 0.1, 0.01, 0.15]),  "El": jnp.array([-70, -60, -65, -65, -67, -85, -70]),
+    "gna": jnp.array([3, 37, 120, 120, 100]), "Ena": jnp.array([50, 55, 55, 55, 50, 50, 50]),
+    "gk": jnp.array([5, 45, 30, 30, 80]),  "Ek": jnp.array([-75, -80, -80, -80, -100, -100, -100]),
     "gt": jnp.array([5, 0.5, 0.5, 0.5]), "Et":0,
-    "gca": jnp.array([0, 2, 0.15, 0.15]), "Eca": jnp.array([0, 140, 120, 120]),
+    "gca": jnp.array([0, 2, 0.15, 0.15]), "Eca": jnp.array([0, 140, 120, 120, 120]),
     "gahp": jnp.array([0, 20, 10, 10]),
     "k1": jnp.array([0, 15, 10, 10]),
     "kca": jnp.array([0, 22.5, 15, 15]),
     "gm": 1,"Em": -100, # for striatum muscarinic current
+
+    # specific cortex params
+    # in order of CTX (PYR), CTX (FSI)
+    #"diam": jnp.array([96, 67]), "L": jnp.array([96, 67]), "Ra": 100, "nseg": 1, # geometry
+    "vtraub": jnp.array([-55, -55]), "gnabar": jnp.array([50, 50]), "gkbar": jnp.array([5, 10]), # mchh2
+    # just CTX (PYR)
+    "gkbar_m": 0.03, # m current
+    "depth": 1, "tau_r": 5, "cainf": 2.4e-4, "gcabar": 0.4, # calcium dynamics
+    "cao": 2 , "celsius": 36, "R": 8.314462618, "FARADAY": 96485.3321, # calcium dynamics
+
     
     # synapse params (Rubin, 2004)
     # in order of Igith, Igesn, Isnge, Igege, Igegi, Isngi
@@ -58,6 +83,17 @@ params = {
     "gsynstr": jnp.array([0.8, 0.5, 0.5]),
     "Esynstr": jnp.array([-80, -85, -85]),
     "ggaba": 0.1, "tau_i": 13,
+
+    # synapse params ctx (Santiniello, 2019)
+    # in order of Ipyr, Ifsi
+    "alphactx": jnp.array([0.55 , 2.5]),
+    "gsynctx": jnp.array([0.27, 0.36, 0.1, 0.29]), # in order of Ipypy, Ipyfsi, Ififi, Ifipy
+    "Esynctx": jnp.array([0, -80]),
+    "tau_ctx": jnp.array([5.26 , 5.56]),
+
+    # stdp params
+    "tau_pre": 12.0,
+    "tau_post": 27.5,
 
     # connectivity matrix
     # 1 : 1 connectivity
@@ -79,11 +115,11 @@ params = {
         [0,1,1,0],
         [0,0,1,1],
         [1,0,0,1],], dtype=jnp.float64),
-    "w_gpe_stn": jnp.array([
-        [1,0,0,1],
-        [1,1,0,0],
-        [0,1,1,0],
-        [0,0,1,1],], dtype=jnp.float64),
+    #"w_gpe_stn": jnp.array([
+    #    [1,0,0,1],
+    #    [1,1,0,0],
+    #    [0,1,1,0],
+    #    [0,0,1,1],], dtype=jnp.float64),
     "w_gpe_gpi": jnp.array([
         [0,0,1,1],
         [1,0,0,1],
@@ -101,123 +137,19 @@ params = {
         [1,1,0,1],
         [1,1,1,0],], dtype=jnp.float32),
     # 4 : 1 connectivity in indirect striatum
-    "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float32)
+    "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float32),
+    
+    # all-to-all connectivity in FSI-FSI CTX
+    "w_fsi": jnp.ones((n_ctx_fsi, n_ctx_fsi), dtype=jnp.float32) - jnp.eye(n_ctx_fsi, dtype=jnp.float32),
+    # all-to-five connectivity in PYR-PYR CTX
+    "w_pyr": w_matrix(n = n_ctx_pyr, k = 5),
+    # all-to-all connectivity in PYR-FSI CTX
+    "w_pyr_fsi": jnp.ones((n_ctx_fsi, n_ctx_pyr), dtype=jnp.float32),
+    # all-to-all connectivity in FSI-PYR CTX
+    "w_fsi_pyr": jnp.ones((n_ctx_pyr, n_ctx_fsi), dtype=jnp.float32),
+    # all-to-all in PYR CTX - Str
+    "w_pyr_str":  jnp.ones((n_dstr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA),
 }
-
-
-# gating variable functions
-#STN
-def stn_taur(V):
-    return 7.1+17.5/(1+jnp.exp(-(V-68)/-2.2))
-
-def stn_taun(V):
-    return 1+100/(1+jnp.exp(-(V+80)/-26))
-
-def stn_tauh(V):
-    return 1+500/(1+jnp.exp(-(V+57)/-3))
-
-def stn_tauc(V):
-    return 1+10/(1+jnp.exp((V+80)/26))
-
-def stn_rinf(V):
-    return 1/(1+jnp.exp((V+67)/2))
-
-def stn_ninf(V):
-    return 1/(1+jnp.exp(-(V+32)/8.0))
-
-def stn_minf(V):
-    return 1/(1+jnp.exp(-(V+30)/15))
-
-def stn_hinf(V):
-    return 1/(1+jnp.exp((V+39)/3.1))
-
-def stn_cinf(V):
-    return 1/(1+jnp.exp(-(V+20)/8))
-
-def stn_binf(R):
-    return 1/(1+jnp.exp(-(R-0.4)/0.1))-1/(1+jnp.exp(0.4/0.1))
-
-def stn_ainf(V):
-    return 1/(1+jnp.exp(-(V+63)/7.8))
-
-# GPe & GPi
-def gpe_ainf(V):
-    return 1/(1+jnp.exp(-(V+57)/2))
-
-def gpe_hinf(V):
-    return 1/(1+jnp.exp((V+58)/12))
-
-def gpe_minf(V):
-    return 1/(1+jnp.exp(-(V+37)/10))
-
-def gpe_ninf(V):
-    return 1/(1+jnp.exp(-(V+50)/14))
-
-def gpe_rinf(V):
-    return 1/(1+jnp.exp((V+70)/2))
-
-def gpe_sinf(V):
-    return 1/(1+jnp.exp(-(V+35)/2))
-
-def gpe_tauh(V):
-    return 0.05+0.27/(1+jnp.exp(-(V+40)/-12))
-
-def gpe_taun(V):
-    return 0.05+0.27/(1+jnp.exp(-(V+40)/-12))
-
-#TH
-def th_taur(V):
-    return 0.15*(28 + jnp.exp(-(V+25)/10.5))
-
-def th_tauh(V):
-    a = 0.128*jnp.exp(-(V+46)/18)
-    b = 4/(1+jnp.exp(-(V+23)/5))
-    return 1/(a+b)
-
-def th_rinf(V):
-    return 1/(1+jnp.exp((V+84)/4))
-
-def th_pinf(V):
-    return 1/(1+jnp.exp(-(V+60)/6.2))
-
-def th_minf(V):
-    return 1/(1+jnp.exp(-(V+37)/7))
-
-def th_hinf(V):
-    return 1/(1+jnp.exp((V+41)/4))
-
-# striatum
-def str_Ggaba(V):
-    return 2.0 * (1.0 + jnp.tanh(V / 4.0))
-
-def str_betap(V):
-    return (-3.209e-4 * (30.0 + V)) / (1.0 - jnp.exp((30.0 + V) / 9.0))
-
-def str_betan(V):
-    return 0.5 * jnp.exp((-57.0 - V) / 40.0)
-
-def str_betam(V):
-    return 0.28 * (V + 27.0) / (jnp.exp((27.0 + V) / 5.0) - 1.0)
-
-def str_betah(V):
-    return 4.0 / (1.0 + jnp.exp((-27.0 - V) / 5.0))
-
-def str_alphap(V):
-    return (3.209e-4 * (30.0 + V)) / (1.0 - jnp.exp((-30.0 - V) / 9.0))
-
-def str_alphan(V):
-    return (0.032 * (52.0 + V)) / (1.0 - jnp.exp((-52.0 - V) / 5.0))
-
-def str_alpham(V):
-    return (0.32 * (54.0 + V)) / (1.0 - jnp.exp((-54.0 - V) / 4.0))
-
-def str_alphah(V):
-    return 0.128 * jnp.exp((-50.0 - V) / 18.0)
-
-
-# synapses
-def Hinf(V, theta):
-    return 1/(1+jnp.exp(-(V - theta)/2))
 
 # defining the functions for ODEterm
 def gpe_rhs(t, y, args):
@@ -232,7 +164,7 @@ def gpe_rhs(t, y, args):
     V2  = y["V2_stn"]   
     N2  = y["N2_stn"]
     H2  = y["H2_stn"]
-    R2  = y["R2_stn"] #check whether we need this
+    R2  = y["R2_stn"] 
     C2  = y["C2_stn"]
     CA2 = y["CA2_stn"]
     S2  = y["S2_stn"]
@@ -244,10 +176,7 @@ def gpe_rhs(t, y, args):
     H3  = y["H3_gpe"]
     R3  = y["R3_gpe"]
     CA3 = y["CA3_gpe"]
-    S3_1  = y["S31_gpe"]
-    S3_2 = y["S32_gpe"]
-    Z3_2 = y["Z32_gpe"]
-
+    S3  = y["S3_gpe"]
 
     #GPi
     V4  = y["V4_gpi"]   
@@ -255,25 +184,51 @@ def gpe_rhs(t, y, args):
     H4  = y["H4_gpi"]
     R4  = y["R4_gpi"]
     CA4 = y["CA4_gpi"]
-    S4_1  = y["S41_gpi"]
-    Z4_1  = y["Z41_gpi"]
-    S4_2 = y["S42_gpi"]
-    Z4_2 = y["Z42_gpi"]
+    S4  = y["S4_gpi"]
+    Z4  = y["Z4_gpi"]
+
 
     # STR direct and indirect
-    V5d  = y["V5d_str"]
-    m5d  = y["m5d_str"]
-    h5d  = y["h5d_str"]
-    n5d  = y["n5d_str"]
-    p5d  = y["p5d_str"]
-    S5d  = y["S5d_str"]
+    V5d  = y["V5_dstr"]
+    m5d  = y["m5_dstr"]
+    h5d  = y["h5_dstr"]
+    n5d  = y["n5_dstr"]
+    p5d  = y["p5_dstr"]
+    S5d  = y["S5_dstr"]
+    S5d_2 = y["S52_dstr"]
+    Z5d_2 = y["Z52_dstr"]
 
-    V5i  = y["V5i_str"] 
-    m5i  = y["m5i_str"]
-    h5i  = y["h5i_str"]
-    n5i  = y["n5i_str"]
-    p5i  = y["p5i_str"]
-    S5i  = y["S5i_str"]
+    V5i  = y["V5_istr"] 
+    m5i  = y["m5_istr"]
+    h5i  = y["h5_istr"]
+    n5i  = y["n5_istr"]
+    p5i  = y["p5_istr"]
+    S5i  = y["S5_istr"]
+    S5i_2 = y["S52_istr"]
+    Z5i_2 = y["Z52_istr"]
+
+    # CTX PYR & FSI
+    # PYR
+    V6 = y["V6_ctx"]
+    M6 = y["M6_ctx"]
+    N6 = y["N6_ctx"]
+    H6 = y["H6_ctx"]
+    MM6 = y["MM6_ctx"]
+    Hca6 = y["Hca6_ctx"]
+    cai6 = y["cai6_ctx"]
+    S6 = y["S6_ctx"]
+    
+    #FSI
+    V7 = y["V7_ctx"]
+    M7 = y["M7_ctx"]
+    N7 = y["N7_ctx"]
+    H7 = y["H7_ctx"]
+    S7 = y["S7_ctx"]
+
+    # STDP state variables
+    x_pre = y["x_pre"]
+    x_post = y["x_post"]
+    W = y["W"]
 
 
     Cm   = params["Cm"]
@@ -295,7 +250,21 @@ def gpe_rhs(t, y, args):
     gsynstr = params["gsynstr"]
     Esynstr = params["Esynstr"]
     ggaba = params["ggaba"]; tau_i = params["tau_i"]
-    w_gpe_stn = params["w_gpe_stn"]
+
+    gpeak = params["gpeak"]; tau = params["tau"]
+    gpeak1 = params["gpeak1"]
+    #diam = params["diam"]; L = params["L"]; Ra = params["Ra"];nseg = params["nseg"]
+    vtraub = params["vtraub"];gnabar = params["gnabar"]; gkbar = params["gkbar"]
+    gkbar_m = params["gkbar_m"]
+    depth = params["depth"]; tau_r = params["tau_r"]; cainf = params["cainf"]; gcabar = params["gcabar"]
+    cao = params["cao"];  celsius = params["celsius"]; R = params["R"]; FARADAY  =params["FARADAY"]
+
+    alphactx = params["alphactx"];  gsynctx = params["gsynctx"]; Esynctx = params["Esynctx"]; tau_ctx = params["tau_ctx"]
+
+    tau_pre = params["tau_pre"]
+    tau_post = params["tau_post"]
+
+    #w_gpe_stn = params["w_gpe_stn"]
     w_stn_gpe = params["w_stn_gpe"] 
     w_gpi_th = params["w_gpi_th"]
     w_gpe_gpi = params["w_gpe_gpi"]
@@ -305,8 +274,12 @@ def gpe_rhs(t, y, args):
     w_dstr = params["w_dstr"]
     w_dstr_gpi = params["w_dstr_gpi"]
     w_istr_gpe = params["w_istr_gpe"]
-    gpeak = params["gpeak"]; tau = params["tau"]
-    gpeak1 = params["gpeak1"]
+    w_pyr = params["w_pyr"]
+    w_fsi = params["w_fsi"]
+    w_pyr_fsi = params["w_pyr_fsi"]
+    w_fsi_pyr = params["w_fsi_pyr"]
+    w_pyr_str = params["w_pyr_str"]
+
 
     # gating steady states & taus from V
     r1   = th_rinf(V1)
@@ -348,6 +321,27 @@ def gpe_rhs(t, y, args):
     tn4 = gpe_taun(V4)
     th4 = gpe_tauh(V4)
     tr4 = 30.0
+
+    m6 = ctx_minf(V6, vtraub[0])
+    n6 = ctx_ninf(V6, vtraub[0])
+    h6 = ctx_hinf(V6, vtraub[0])
+    tm6 = ctx_taum(V6, vtraub[0])
+    tn6 = ctx_taun(V6, vtraub[0])
+    th6 = ctx_tauh(V6, vtraub[0])
+    m7 = ctx_minf(V7, vtraub[1])
+    n7 = ctx_ninf(V7, vtraub[1])
+    h7 = ctx_hinf(V7, vtraub[1])
+    tm7 = ctx_taum(V7, vtraub[1])
+    tn7 = ctx_taun(V7, vtraub[1])
+    th7 = ctx_tauh(V7, vtraub[1])
+
+    mm6 = ctx_minf_m(V6)
+    tmm6 = ctx_taum_m(V6)
+    mca6 = ctx_minf_ca(V6)
+    hca6 = ctx_hinf_ca(V6)
+    thca6 = ctx_tauh_ca(V6)
+
+
 
     # thalamic currents
     Il1  = gl[0]  * (V1 - El[0])
@@ -402,8 +396,24 @@ def gpe_rhs(t, y, args):
     Il5i =  gl[4]  * (V5i - El[4]) 
     Im5i = (2.6 - 1.1 * pd) * gm * p5i * (V5i - Em)
 
-    Ictx = 3.0 #mock current from cortex
+    # currents cortex
+    # CTX PYR
+    Il6 = gl[5] * (V6 - El[5])
+    Ina6 = gnabar[0] * (M6**3) * H6 * (V6 - Ena[5])
+    Ik6 =  gkbar[0]  * (N6**4) * (V6 - Ek[5])
+    Im6 = gkbar_m * MM6 * (V6 - Ek[5])
+    carev = 1e3 * (R *(celsius+273.15)) / (2 * FARADAY) * jnp.log (cao/cai6)  # calcium dynamics
+    Ica6 = gcabar * (mca6**2) * Hca6 * (V6 - carev)   # calcium dynamics
+   # applied current 
+    Iappctx6 = 5
 
+    # CTX FSI
+    Il7 = gl[6] * (V7 - El[6])
+    Ina7 = gnabar[1] * (M7**3) * H7 * (V7 - Ena[6])
+    Ik7 =  gkbar[1]  * (N7**4) * (V7 - Ek[6])
+
+   # applied current 
+    Iappctx7 = 3
 
     # synapses with connectivity matrices
 
@@ -415,47 +425,73 @@ def gpe_rhs(t, y, args):
     H_dstr = Hinf(V5d, theta=20.0)
 
     # differential equations synapses
-    # GPi synaptic currents (2nd order alpha synapses)
+    # STN synapses (2nd order alpha synapses)
     u2 = gpeak / (tau * jnp.exp(-1.0)) * H_stn
     dS2dt = Z2
     dZ2dt = u2 - (2.0 / tau) * Z2 - (1.0 / tau**2) * S2
 
-    # STN synaptic currents (2nd order alpha synapses)
+    # GPi synaptic currents (2nd order alpha synapses)
     u4 = gpeak1 / (tau * jnp.exp(-1.0)) * H_gpi
-    dS41dt = Z4_1
-    dZ41dt = u4 - (2.0 / tau) * Z4_1 - (1.0 / tau**2) * S4_1
+    dS4dt = Z4
+    dZ4dt = u4 - (2.0 / tau) * Z4 - (1.0 / tau**2) * S4
 
     # GPe synaptic currents 
-    dS3dt = A[1] * (1 - S3_1) * H_gpe - B[1] * S3_1
+    dS3dt = A[1] * (1 - S3) * H_gpe - B[1] * S3
+
+    # GPe-STN STDP
+    #spike indicators
+    pre_spike  = spike_event(V3, 0)
+    post_spike = spike_event(V2, 0)
+    # STDP traces
+    dx_pre_dt  = -x_pre/tau_pre  + pre_spike
+    dx_post_dt = -x_post/tau_post + post_spike
+
+    # STDP weight rule
+    A_plus  = 0.002
+    A_minus = 0.002 * 1.1
+
+    dWdt = (
+        A_plus  * jnp.outer(post_spike, x_pre)
+        - A_minus * jnp.outer(x_post, pre_spike)
+    )
 
     # str synaptic currents (2nd order alpha synapses)
     #str to gpe
     u3 = gpeak1 / (tau * jnp.exp(-1.0)) * H_istr
-    dS32dt = Z3_2
-    dZ32dt = u3 - (2.0 / tau) * Z3_2 - (1.0 / tau**2) * S3_2
+    dS52idt = Z5i_2
+    dZ52idt = u3 - (2.0 / tau) * Z5i_2 - (1.0 / tau**2) * S5i_2
 
     #str to gpi
     u5 = gpeak1 / (tau * jnp.exp(-1.0)) * H_dstr
-    dS42dt = Z4_2
-    dZ42dt = u5 - (2.0 / tau) * Z4_2 - (1.0 / tau**2) * S4_2  
+    dS52ddt = Z5d_2
+    dZ52ddt = u5 - (2.0 / tau) * Z5d_2 - (1.0 / tau**2) * S5d_2  
 
     # recurrent gaba currents
     dS5idt = (w_istr @ str_Ggaba(V5i)) * (1.0 - S5i) - (S5i /tau_i)
     dS5ddt = (w_dstr @ str_Ggaba(V5d)) * (1.0 -S5d) - (S5d /tau_i)
 
+    # CTX
+    # PYR AMPA synapses (Santiniello, 2019)
+    dS6dt = alphactx[0] * (1 + jnp.tanh((V6)/ 4))*(1.0 - S6) - (S6 / tau_ctx[0]) 
+    # FSI GABA synapses
+    dS7dt = alphactx[1] * (1 + jnp.tanh((V7)/ 4))*(1.0 - S7) - (S7 / tau_ctx[1]) 
 
     # synaptic currents using those gating variables
-    Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4_1))
-    Igesn = 0.5 *  (gsyn[1] * (V2 - Esyn[1]) * (w_gpe_stn @ S3_1))
+    Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4))
+    Igesn = 0.5 *  (gsyn[1] * (V2 - Esyn[1]) * (W @ S3))
     Isnge = 0.5 *  (gsyn[2] * (V3 - Esyn[2]) * ( w_stn_gpe  @ S2))
-    Igege = 0.5 *  (gsyn[3] * (V3 - Esyn[3]) *  (w_gpe_gpe @ S3_1))
-    Igegi = 0.5 *  (gsyn[4] * (V4 - Esyn[4]) *  (w_gpe_gpi @ S3_1))
+    Igege = 0.5 *  (gsyn[3] * (V3 - Esyn[3]) *  (w_gpe_gpe @ S3))
+    Igegi = 0.5 *  (gsyn[4] * (V4 - Esyn[4]) *  (w_gpe_gpi @ S3))
     Isngi = 0.5 *  (gsyn[5] * (V4 - Esyn[5]) *  (w_stn_gpi  @ S2))
-    Istrge = gsynstr[1] * (V3 - Esynstr[1]) * (w_istr_gpe  @ S3_2) # from in FOG: Istrge = 0.1 * ... - why?
-    Istrgi = gsynstr[2] * (V4 - Esynstr[2]) * (w_dstr_gpi  @ S4_2)
+    Istrge = gsynstr[0] * (V3 - Esynstr[0]) * (w_istr_gpe  @ S5i_2) # from in FOG: Istrge = 0.1 * ... - why?
+    Istrgi = gsynstr[1] * (V4 - Esynstr[1]) * (w_dstr_gpi  @ S5d_2)
     Istrd = (ggaba/3) * (V5d - Esynstr[0]) * S5d
-    Istri = (ggaba/4) * (V5i - Esynstr[0]) * S5i
-
+    Istri = (ggaba/4) * (V5i - Esynstr[1]) * S5i
+    Ipypy = gsynctx[0] * (V6 - Esynctx[0]) * (w_pyr  @ S6) / 5 # change to normalizing by number of presynaptic input neurons
+    Ipyfi = gsynctx[1] * (V7 - Esynctx[1]) * (w_pyr_fsi  @ S6) / 20
+    Ififi = gsynctx[2] * (V7 - Esynctx[1]) * (w_fsi  @ S7) / 2
+    Ifipy = gsynctx[3] * (V6 - Esynctx[0]) * (w_fsi_pyr  @ S7) /2
+    Ipystr = gsynctx[0] * (V5d - Esynctx[0]) * (w_pyr_str  @ S6) / 20 # check for valid parameters here 
 
 
     # differential equations th
@@ -486,17 +522,32 @@ def gpe_rhs(t, y, args):
     dCA4dt = 1e-4 * (-Ica4 - It4 - kca[2] * CA4)
 
     # differential equations str
-    dV5ddt = (-Il5d - Ik5d - Ina5d - Im5d - Istrd + Ictx) / Cm
+    dV5ddt = (-Il5d - Ik5d - Ina5d - Im5d - Istrd - Ipystr) / Cm
     dm5ddt = str_alpham(V5d) * (1 - m5d) - str_betam(V5d) * m5d
     dh5ddt = str_alphah(V5d) * (1 - h5d) - str_betah(V5d) * h5d
     dn5ddt = str_alphan(V5d) * (1 - n5d) - str_betan(V5d) * n5d
     dp5ddt = str_alphap(V5d) * (1 - p5d) - str_betap(V5d) * p5d
 
-    dV5idt = (-Il5i - Ik5i - Ina5i - Im5i - Istri + Ictx) / Cm
+    dV5idt = (-Il5i - Ik5i - Ina5i - Im5i - Istri) / Cm
     dm5idt = str_alpham(V5i) * (1 - m5i) - str_betam(V5i) * m5i
     dh5idt = str_alphah(V5i) * (1 - h5i) - str_betah(V5i) * h5i
     dn5idt = str_alphan(V5i) * (1 - n5i) - str_betan(V5i) * n5i
-    dp5idt = str_alphap(V5i) * (1 - p5i) - str_betap(V5i) * p5i 
+    dp5idt = str_alphap(V5i) * (1 - p5i) - str_betap(V5i) * p5i
+
+    # differential equations CTX
+    dV6dt = (-Il6 - Ik6 - Ina6 - Im6 - Ica6 - Ipypy - Ifipy + Iappctx6) / Cm
+    dM6dt = (m6 - M6) / tm6
+    dN6dt = (n6 - N6) / tn6
+    dH6dt = (h6 - H6) / th6
+    dMM6dt = (mm6 - MM6) / tmm6
+    dHca6dt = (hca6 -Hca6) / thca6
+    dcai6dt = ca_drive(Ica6, FARADAY, depth) + (cainf - cai6) / tau_r
+    
+
+    dV7dt = (-Il7 - Ik7 - Ina7 + Iappctx7) / Cm  # took out: Ipyfi & Ififi (too strong?)
+    dM7dt = (m7 - M7) / tm7
+    dN7dt = (n7 - N7) / tn7
+    dH7dt = (h7 - H7) / th7
 
     return {
         "V1_th":  dV1dt,
@@ -517,34 +568,51 @@ def gpe_rhs(t, y, args):
         "H3_gpe":  dH3dt,
         "R3_gpe":  dR3dt,
         "CA3_gpe": dCA3dt,
-        "S31_gpe": dS3dt,
-        "S32_gpe": dS32dt,
-        "Z32_gpe": dZ32dt,
+        "S3_gpe": dS3dt,
+        "W": dWdt,
+        "x_pre": dx_pre_dt,
+        "x_post": dx_post_dt,
 
         "V4_gpi":  dV4dt,
         "N4_gpi":  dN4dt,
         "H4_gpi":  dH4dt,
         "R4_gpi":  dR4dt,
         "CA4_gpi": dCA4dt,
-        "S41_gpi": dS41dt,
-        "Z41_gpi": dZ41dt,
-        "S42_gpi": dS42dt,
-        "Z42_gpi": dZ42dt,
+        "S4_gpi": dS4dt,
+        "Z4_gpi": dZ4dt,
 
-        "V5d_str": dV5ddt,
-        "m5d_str": dm5ddt,
-        "h5d_str": dh5ddt,
-        "n5d_str": dn5ddt,
-        "p5d_str": dp5ddt,
-        "S5d_str": dS5ddt,
+        "V5_dstr": dV5ddt,
+        "m5_dstr": dm5ddt,
+        "h5_dstr": dh5ddt,
+        "n5_dstr": dn5ddt,
+        "p5_dstr": dp5ddt,
+        "S5_dstr": dS5ddt,
+        "S52_dstr": dS52ddt,
+        "Z52_dstr": dZ52ddt,
 
-        "V5i_str": dV5idt,
-        "m5i_str": dm5idt,
-        "h5i_str": dh5idt,
-        "n5i_str": dn5idt,
-        "p5i_str": dp5idt,
-        "S5i_str": dS5idt,
+        "V5_istr": dV5idt,
+        "m5_istr": dm5idt,
+        "h5_istr": dh5idt,
+        "n5_istr": dn5idt,
+        "p5_istr": dp5idt,
+        "S5_istr": dS5idt,
+        "S52_istr": dS52idt,
+        "Z52_istr": dZ52idt,
 
+        "V6_ctx": dV6dt,
+        "M6_ctx": dM6dt,
+        "N6_ctx": dN6dt,
+        "H6_ctx": dH6dt,
+        "MM6_ctx": dMM6dt,
+        "Hca6_ctx": dHca6dt,
+        "cai6_ctx": dcai6dt,
+        "S6_ctx": dS6dt,
+
+        "V7_ctx": dV7dt,
+        "M7_ctx": dM7dt,
+        "N7_ctx": dN7dt,
+        "H7_ctx": dH7dt,
+        "S7_ctx": dS7dt,
     }
 
 
@@ -555,6 +623,9 @@ V3_init = -62
 V4_init = -62
 V5d_init = -60
 V5i_init = -60
+V6_init = -60
+V7_init = -60
+vtraub = params["vtraub"]
 
 y0 = {
     "V1_th":  jnp.full((n_th,), V1_init),
@@ -575,34 +646,52 @@ y0 = {
     "H3_gpe":  gpe_hinf(V3_init)  * jnp.ones((n_gpe,)),
     "R3_gpe":  gpe_rinf(V3_init)  * jnp.ones((n_gpe,)),
     "CA3_gpe": jnp.full((n_gpe,), 0.1),
-    "S31_gpe":  jnp.zeros((n_gpe,),),
-    "S32_gpe":  jnp.zeros((n_istr,),),
-    "Z32_gpe":  jnp.zeros((n_istr,),),
+    "S3_gpe":  jnp.zeros((n_gpe,),),
+
+    "W": jax.random.uniform(jax.random.PRNGKey(0), (n_stn, n_gpe), minval=0.05, maxval=0.20),
+    "x_pre":jnp.zeros((n_gpe,),),
+    "x_post":jnp.zeros((n_stn,),),
 
     "V4_gpi":  jnp.full((n_gpi,), V4_init),
     "N4_gpi":  gpe_ninf(V4_init)  * jnp.ones((n_gpi,)),  
     "H4_gpi":  gpe_hinf(V4_init)  * jnp.ones((n_gpi,)),
     "R4_gpi":  gpe_rinf(V4_init)  * jnp.ones((n_gpi,)),
     "CA4_gpi": jnp.full((n_gpi,), 0.1),
-    "S41_gpi":  jnp.zeros((n_gpi,),),
-    "Z41_gpi":  jnp.zeros((n_gpi,),),
-    "S42_gpi":  jnp.zeros((n_dstr,),),
-    "Z42_gpi":  jnp.zeros((n_dstr,),),
+    "S4_gpi":  jnp.zeros((n_gpi,),),
+    "Z4_gpi":  jnp.zeros((n_gpi,),),
 
-    "V5d_str":  jnp.full((n_dstr,), V5d_init),
-    "m5d_str":  str_alpham(V5d_init)/(str_alpham(V5d_init)+str_betam(V5d_init))* jnp.ones((n_dstr,)),  
-    "h5d_str":  str_alphah(V5d_init)/(str_alphah(V5d_init)+str_betah(V5d_init))* jnp.ones((n_dstr,)),  
-    "n5d_str":  str_alphan(V5d_init)/(str_alphan(V5d_init)+str_betan(V5d_init))* jnp.ones((n_dstr,)),  
-    "p5d_str":  str_alphap(V5d_init)/(str_alphap(V5d_init)+str_betap(V5d_init))* jnp.ones((n_dstr,)),
-    "S5d_str":  jnp.full((n_dstr,), 0.1),
+    "V5_dstr":  jnp.full((n_dstr,), V5d_init),
+    "m5_dstr":  str_alpham(V5d_init)/(str_alpham(V5d_init)+str_betam(V5d_init))* jnp.ones((n_dstr,)),  
+    "h5_dstr":  str_alphah(V5d_init)/(str_alphah(V5d_init)+str_betah(V5d_init))* jnp.ones((n_dstr,)),  
+    "n5_dstr":  str_alphan(V5d_init)/(str_alphan(V5d_init)+str_betan(V5d_init))* jnp.ones((n_dstr,)),  
+    "p5_dstr":  str_alphap(V5d_init)/(str_alphap(V5d_init)+str_betap(V5d_init))* jnp.ones((n_dstr,)),
+    "S5_dstr":  jnp.full((n_dstr,), 0.1),
+    "S52_dstr":  jnp.zeros((n_dstr,),),
+    "Z52_dstr":  jnp.zeros((n_dstr,),),
  
-    "V5i_str":  jnp.full((n_istr,), V5i_init), 
-    "m5i_str":  str_alpham(V5i_init)/(str_alpham(V5i_init)+str_betam(V5i_init))* jnp.ones((n_istr,)),  
-    "h5i_str":  str_alphah(V5i_init)/(str_alphah(V5i_init)+str_betah(V5i_init))* jnp.ones((n_istr,)),  
-    "n5i_str":  str_alphan(V5i_init)/(str_alphan(V5i_init)+str_betan(V5i_init))* jnp.ones((n_istr,)),  
-    "p5i_str":  str_alphap(V5i_init)/(str_alphap(V5i_init)+str_betap(V5i_init))* jnp.ones((n_istr,)), 
-    "S5i_str":  jnp.full((n_istr,), 0.1), 
-    
+    "V5_istr":  jnp.full((n_istr,), V5i_init), 
+    "m5_istr":  str_alpham(V5i_init)/(str_alpham(V5i_init)+str_betam(V5i_init))* jnp.ones((n_istr,)),  
+    "h5_istr":  str_alphah(V5i_init)/(str_alphah(V5i_init)+str_betah(V5i_init))* jnp.ones((n_istr,)),  
+    "n5_istr":  str_alphan(V5i_init)/(str_alphan(V5i_init)+str_betan(V5i_init))* jnp.ones((n_istr,)),  
+    "p5_istr":  str_alphap(V5i_init)/(str_alphap(V5i_init)+str_betap(V5i_init))* jnp.ones((n_istr,)), 
+    "S5_istr":  jnp.full((n_istr,), 0.1),
+    "S52_istr":  jnp.zeros((n_istr,),),
+    "Z52_istr":  jnp.zeros((n_istr,),),
+
+    "V6_ctx":  jnp.full((n_ctx_pyr,), V6_init),
+    "N6_ctx":  ctx_ninf(V6_init, vtraub[0])  * jnp.ones((n_ctx_pyr,)),  
+    "H6_ctx":  ctx_hinf(V6_init, vtraub[0])  * jnp.ones((n_ctx_pyr,)),
+    "M6_ctx":  ctx_minf(V6_init, vtraub[0])  * jnp.ones((n_ctx_pyr,)),
+    "MM6_ctx": ctx_minf_m(V6_init)  * jnp.ones((n_ctx_pyr,)),
+    "Hca6_ctx": ctx_hinf_ca(V6_init) * jnp.ones((n_ctx_pyr,)),
+    "cai6_ctx": 2.4e-4 * jnp.ones((n_ctx_pyr,)),
+    "S6_ctx":  jnp.zeros((n_ctx_pyr,),),
+
+    "V7_ctx": jnp.full((n_ctx_fsi,), V7_init),
+    "M7_ctx": ctx_minf(V7_init, vtraub[1]) * jnp.ones((n_ctx_fsi,)),
+    "H7_ctx": ctx_hinf(V7_init, vtraub[1]) * jnp.ones((n_ctx_fsi,)),
+    "N7_ctx": ctx_ninf(V7_init, vtraub[1]) * jnp.ones((n_ctx_fsi,)),
+    "S7_ctx":  jnp.zeros((n_ctx_fsi,),),
 }
 
 #%% chunked diffrax solver version
@@ -649,11 +738,14 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
     all_V4 = []
     all_V5d= []
     all_V5i= []
+    all_V6 = []
+    all_V7 = []
+    all_W = []
 
     # looping across chunks 
     # using jit compilation inside each chunk (run_chunk)
     while t0 < tmax:
-        t1 = jnp.minimum(t0 + chunk_size, tmax)
+        t1 = min(t0 + chunk_size, tmax)
         ts, ys, y = run_chunk(y, params, t0, t1, dt0, dt_save)
 
         all_ts.append(ts)
@@ -661,24 +753,36 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
         all_V2.append(ys["V2_stn"])   
         all_V3.append(ys["V3_gpe"])
         all_V4.append(ys["V4_gpi"])
-        all_V5d.append(ys["V5d_str"])
-        all_V5i.append(ys["V5i_str"])
+        all_V5d.append(ys["V5_dstr"])
+        all_V5i.append(ys["V5_istr"])
+        all_V6.append(ys["V6_ctx"])
+        all_V7.append(ys["V7_ctx"])
+        all_W.append(ys["W"])
 
         t0 = float(t1)
 
-    return jnp.concatenate(all_ts), jnp.concatenate(all_V1), jnp.concatenate(all_V2), jnp.concatenate(all_V3), jnp.concatenate(all_V4), jnp.concatenate(all_V5d), jnp.concatenate(all_V5i)
-
-
+    return (
+        jnp.concatenate(all_ts),
+        jnp.concatenate(all_V1),
+        jnp.concatenate(all_V2),
+        jnp.concatenate(all_V3),
+        jnp.concatenate(all_V4),
+        jnp.concatenate(all_V5d),
+        jnp.concatenate(all_V5i),
+        jnp.concatenate(all_V6),
+        jnp.concatenate(all_V7),
+        jnp.concatenate(all_W)
+    )
 
 
 
 #%% run simulation
-tmax = 1000.0
-chunk_size = 100.0      # 1 second per chunk
+tmax = 100.0
+chunk_size = 10.0      # 1 second per chunk
 dt0 = 0.1
 dt_save = 1.0            # save every 1 ms
 
-ts, V1, V2, V3, V4, V5d, V5i = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
+ts, V1, V2, V3, V4, V5d, V5i, V6, V7, W = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
 
 #%%
 # plot to check
@@ -699,7 +803,6 @@ plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
 
-
 # plot to check
 plt.plot(ts, V4[:,1])
 plt.xlabel("t (ms)")
@@ -717,4 +820,17 @@ plt.plot(ts, V5i[:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.show()
+
+# plot to check
+plt.plot(ts, V6[:,3])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.show()
+
+# plot to check
+plt.plot(ts, V7[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.show()
+
 # %%
