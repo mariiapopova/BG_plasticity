@@ -13,6 +13,8 @@ import jax.numpy as jnp
 import diffrax
 import matplotlib.pyplot as plt
 from additional_functions import *
+from checkfreq import *
+import matplotlib.mlab as mlab
 
 #jax.config.update("jax_enable_x64", True)
 print(jax.devices())
@@ -33,7 +35,7 @@ n_ctx_pyr = 20
 pd = 0
 
 DA = 0.9 # healthy
-DA_pd = 0.1
+#DA = 0.1  # pd
 
 # dopamine scaling from CTX to Str
 def cD1(DA, AD1=10.0, lambda_str=7.5):
@@ -440,8 +442,8 @@ def gpe_rhs(t, y, args):
 
     # GPe-STN STDP
     #spike indicators
-    pre_spike  = spike_event(V3, 0)
-    post_spike = spike_event(V2, 0)
+    pre_spike  = spike_event(V3, -20)
+    post_spike = spike_event(V2, -20)
     # STDP traces
     dx_pre_dt  = -x_pre/tau_pre  + pre_spike
     dx_post_dt = -x_post/tau_post + post_spike
@@ -616,7 +618,15 @@ def gpe_rhs(t, y, args):
     }
 
 
+
 # initial values and params
+key = jax.random.PRNGKey(0)
+(
+    key_v1, key_v2, key_v3, key_v4,
+    key_v5d, key_v5i, key_v6, key_v7,
+    key_w
+) = jax.random.split(key, 9)
+
 V1_init = -62
 V2_init = -62
 V3_init = -62
@@ -627,72 +637,85 @@ V6_init = -60
 V7_init = -60
 vtraub = params["vtraub"]
 
+# noise amplitude in mV
+sigma_init = 2.0
+
+V1_0 = V1_init + sigma_init * jax.random.normal(key_v1, (n_th,))
+V2_0 = V2_init + sigma_init * jax.random.normal(key_v2, (n_stn,))
+V3_0 = V3_init + sigma_init * jax.random.normal(key_v3, (n_gpe,))
+V4_0 = V4_init + sigma_init * jax.random.normal(key_v4, (n_gpi,))
+V5d_0 = V5d_init + sigma_init * jax.random.normal(key_v5d, (n_dstr,))
+V5i_0 = V5i_init + sigma_init * jax.random.normal(key_v5i, (n_istr,))
+V6_0 = V6_init + sigma_init * jax.random.normal(key_v6, (n_ctx_pyr,))
+V7_0 = V7_init + sigma_init * jax.random.normal(key_v7, (n_ctx_fsi,))
+
 y0 = {
-    "V1_th":  jnp.full((n_th,), V1_init),
-    "H1_th":  th_hinf(V1_init)  * jnp.ones((n_th,)),
-    "R1_th":  th_rinf(V1_init)  * jnp.ones((n_th,)),
+    "V1_th":  V1_0,
+    "H1_th":  th_hinf(V1_0),
+    "R1_th":  th_rinf(V1_0),
 
-    "V2_stn":  jnp.full((n_stn,), V2_init),
-    "N2_stn":  stn_ninf(V2_init)  * jnp.ones((n_stn,)),
-    "H2_stn":  stn_hinf(V2_init)  * jnp.ones((n_stn,)),
-    "R2_stn":  stn_rinf(V2_init)  * jnp.ones((n_stn,)),
-    "C2_stn":  stn_cinf(V2_init)  * jnp.ones((n_stn,)),
+    "V2_stn":  V2_0,
+    "N2_stn":  stn_ninf(V2_0),
+    "H2_stn":  stn_hinf(V2_0),
+    "R2_stn":  stn_rinf(V2_0),
+    "C2_stn":  stn_cinf(V2_0),
     "CA2_stn": jnp.full((n_stn,), 0.1),
-    "S2_stn":  jnp.zeros((n_stn,),),
-    "Z2_stn":  jnp.zeros((n_stn,),),
+    "S2_stn":  jnp.zeros((n_stn,)),
+    "Z2_stn":  jnp.zeros((n_stn,)),
 
-    "V3_gpe":  jnp.full((n_gpe,), V3_init),
-    "N3_gpe":  gpe_ninf(V3_init)  * jnp.ones((n_gpe,)),  
-    "H3_gpe":  gpe_hinf(V3_init)  * jnp.ones((n_gpe,)),
-    "R3_gpe":  gpe_rinf(V3_init)  * jnp.ones((n_gpe,)),
+    "V3_gpe":  V3_0,
+    "N3_gpe":  gpe_ninf(V3_0),
+    "H3_gpe":  gpe_hinf(V3_0),
+    "R3_gpe":  gpe_rinf(V3_0),
     "CA3_gpe": jnp.full((n_gpe,), 0.1),
-    "S3_gpe":  jnp.zeros((n_gpe,),),
+    "S3_gpe":  jnp.zeros((n_gpe,)),
 
-    "W": jax.random.uniform(jax.random.PRNGKey(0), (n_stn, n_gpe), minval=0.05, maxval=0.20),
-    "x_pre":jnp.zeros((n_gpe,),),
-    "x_post":jnp.zeros((n_stn,),),
+    "W": jax.random.uniform(key_w, (n_stn, n_gpe), minval=0.05, maxval=0.20),
+    "x_pre": jnp.zeros((n_gpe,)),
+    "x_post": jnp.zeros((n_stn,)),
 
-    "V4_gpi":  jnp.full((n_gpi,), V4_init),
-    "N4_gpi":  gpe_ninf(V4_init)  * jnp.ones((n_gpi,)),  
-    "H4_gpi":  gpe_hinf(V4_init)  * jnp.ones((n_gpi,)),
-    "R4_gpi":  gpe_rinf(V4_init)  * jnp.ones((n_gpi,)),
+    "V4_gpi":  V4_0,
+    "N4_gpi":  gpe_ninf(V4_0),
+    "H4_gpi":  gpe_hinf(V4_0),
+    "R4_gpi":  gpe_rinf(V4_0),
     "CA4_gpi": jnp.full((n_gpi,), 0.1),
-    "S4_gpi":  jnp.zeros((n_gpi,),),
-    "Z4_gpi":  jnp.zeros((n_gpi,),),
+    "S4_gpi":  jnp.zeros((n_gpi,)),
+    "Z4_gpi":  jnp.zeros((n_gpi,)),
 
-    "V5_dstr":  jnp.full((n_dstr,), V5d_init),
-    "m5_dstr":  str_alpham(V5d_init)/(str_alpham(V5d_init)+str_betam(V5d_init))* jnp.ones((n_dstr,)),  
-    "h5_dstr":  str_alphah(V5d_init)/(str_alphah(V5d_init)+str_betah(V5d_init))* jnp.ones((n_dstr,)),  
-    "n5_dstr":  str_alphan(V5d_init)/(str_alphan(V5d_init)+str_betan(V5d_init))* jnp.ones((n_dstr,)),  
-    "p5_dstr":  str_alphap(V5d_init)/(str_alphap(V5d_init)+str_betap(V5d_init))* jnp.ones((n_dstr,)),
+    "V5_dstr":  V5d_0,
+    "m5_dstr":  str_alpham(V5d_0) / (str_alpham(V5d_0) + str_betam(V5d_0)),
+    "h5_dstr":  str_alphah(V5d_0) / (str_alphah(V5d_0) + str_betah(V5d_0)),
+    "n5_dstr":  str_alphan(V5d_0) / (str_alphan(V5d_0) + str_betan(V5d_0)),
+    "p5_dstr":  str_alphap(V5d_0) / (str_alphap(V5d_0) + str_betap(V5d_0)),
     "S5_dstr":  jnp.full((n_dstr,), 0.1),
-    "S52_dstr":  jnp.zeros((n_dstr,),),
-    "Z52_dstr":  jnp.zeros((n_dstr,),),
- 
-    "V5_istr":  jnp.full((n_istr,), V5i_init), 
-    "m5_istr":  str_alpham(V5i_init)/(str_alpham(V5i_init)+str_betam(V5i_init))* jnp.ones((n_istr,)),  
-    "h5_istr":  str_alphah(V5i_init)/(str_alphah(V5i_init)+str_betah(V5i_init))* jnp.ones((n_istr,)),  
-    "n5_istr":  str_alphan(V5i_init)/(str_alphan(V5i_init)+str_betan(V5i_init))* jnp.ones((n_istr,)),  
-    "p5_istr":  str_alphap(V5i_init)/(str_alphap(V5i_init)+str_betap(V5i_init))* jnp.ones((n_istr,)), 
+    "S52_dstr": jnp.zeros((n_dstr,)),
+    "Z52_dstr": jnp.zeros((n_dstr,)),
+
+    "V5_istr":  V5i_0,
+    "m5_istr":  str_alpham(V5i_0) / (str_alpham(V5i_0) + str_betam(V5i_0)),
+    "h5_istr":  str_alphah(V5i_0) / (str_alphah(V5i_0) + str_betah(V5i_0)),
+    "n5_istr":  str_alphan(V5i_0) / (str_alphan(V5i_0) + str_betan(V5i_0)),
+    "p5_istr":  str_alphap(V5i_0) / (str_alphap(V5i_0) + str_betap(V5i_0)),
     "S5_istr":  jnp.full((n_istr,), 0.1),
-    "S52_istr":  jnp.zeros((n_istr,),),
-    "Z52_istr":  jnp.zeros((n_istr,),),
+    "S52_istr": jnp.zeros((n_istr,)),
+    "Z52_istr": jnp.zeros((n_istr,)),
 
-    "V6_ctx":  jnp.full((n_ctx_pyr,), V6_init),
-    "N6_ctx":  ctx_ninf(V6_init, vtraub[0])  * jnp.ones((n_ctx_pyr,)),  
-    "H6_ctx":  ctx_hinf(V6_init, vtraub[0])  * jnp.ones((n_ctx_pyr,)),
-    "M6_ctx":  ctx_minf(V6_init, vtraub[0])  * jnp.ones((n_ctx_pyr,)),
-    "MM6_ctx": ctx_minf_m(V6_init)  * jnp.ones((n_ctx_pyr,)),
-    "Hca6_ctx": ctx_hinf_ca(V6_init) * jnp.ones((n_ctx_pyr,)),
+    "V6_ctx":  V6_0,
+    "N6_ctx":  ctx_ninf(V6_0, vtraub[0]),
+    "H6_ctx":  ctx_hinf(V6_0, vtraub[0]),
+    "M6_ctx":  ctx_minf(V6_0, vtraub[0]),
+    "MM6_ctx": ctx_minf_m(V6_0),
+    "Hca6_ctx": ctx_hinf_ca(V6_0),
     "cai6_ctx": 2.4e-4 * jnp.ones((n_ctx_pyr,)),
-    "S6_ctx":  jnp.zeros((n_ctx_pyr,),),
+    "S6_ctx":  jnp.zeros((n_ctx_pyr,)),
 
-    "V7_ctx": jnp.full((n_ctx_fsi,), V7_init),
-    "M7_ctx": ctx_minf(V7_init, vtraub[1]) * jnp.ones((n_ctx_fsi,)),
-    "H7_ctx": ctx_hinf(V7_init, vtraub[1]) * jnp.ones((n_ctx_fsi,)),
-    "N7_ctx": ctx_ninf(V7_init, vtraub[1]) * jnp.ones((n_ctx_fsi,)),
-    "S7_ctx":  jnp.zeros((n_ctx_fsi,),),
+    "V7_ctx":  V7_0,
+    "M7_ctx":  ctx_minf(V7_0, vtraub[1]),
+    "H7_ctx":  ctx_hinf(V7_0, vtraub[1]),
+    "N7_ctx":  ctx_ninf(V7_0, vtraub[1]),
+    "S7_ctx":  jnp.zeros((n_ctx_fsi,)),
 }
+
 
 #%% chunked diffrax solver version
 
@@ -777,60 +800,268 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
 
 
 #%% run simulation
-tmax = 100.0
-chunk_size = 10.0      # 1 second per chunk
+tmax = 1000.0
+chunk_size = 100.0      # 1 second per chunk
 dt0 = 0.1
 dt_save = 1.0            # save every 1 ms
 
 ts, V1, V2, V3, V4, V5d, V5i, V6, V7, W = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
+
+population_voltages = {
+    "TH": V1,
+    "STN": V2,
+    "GPe": V3,
+    "GPi": V4,
+    "dStr": V5d,
+    "iStr": V5i,
+    "PYR": V6,
+    "FSI": V7,
+}
 
 #%%
 # plot to check
 plt.plot(ts, V1[:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("TH")
 plt.show()
 
 # plot to check
 plt.plot(ts, V2[:,2])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("STN")
 plt.show()
 
 # plot to check
 plt.plot(ts, V3[:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("GPe")
 plt.show()
 
 # plot to check
 plt.plot(ts, V4[:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("GPi")
 plt.show()
 
 # plot to check
 plt.plot(ts, V5d[:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("direct Striatum")
 plt.show()
 
 # plot to check
 plt.plot(ts, V5i[:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("indirect Striatum")
 plt.show()
 
 # plot to check
 plt.plot(ts, V6[:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("Cortex (PYR)")
 plt.show()
 
 # plot to check
 plt.plot(ts, V7[:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
+plt.title("Cortex (FSI)")
 plt.show()
+
+# plot to check
+plt.plot(ts, W[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("W")
+plt.show()
+
+# %% model validation
+# 1. mean Hz rate
+results = compute_metrics_all_populations(
+    population_voltages=population_voltages,
+    dt_ms=1.0,
+    spike_height_map={
+        "GPe": -20.0,
+        "GPi": -20.0,
+        "TH": -20.0,
+        "STN": -20.0,
+        "PYR": 0.0,
+        "FSI": -20.0,
+        "dStr": -20.0,
+        "iStr": -20.0,
+    },
+    refractory_ms=2.0,
+)
+
+mean_rates = {pop: res["mean_rate_hz"] for pop, res in results.items()}
+
+for pop, rate in mean_rates.items():
+    print(f"{pop}: {rate:.3f} Hz")
+
+# plot
+def plot_population_boxplots(results, population_order=None):
+    if population_order is None:
+        population_order = list(results.keys())
+
+    labels = [pop for pop in population_order if pop in results]
+    data = [results[pop]["rates_hz"] for pop in labels]
+
+    plt.figure(figsize=(8, 6))
+    plt.boxplot(
+        data,
+        vert=False,
+        tick_labels=labels,
+        patch_artist=True,
+        showmeans=True,
+        meanprops=dict(marker='*', markeredgecolor='black', markersize=7),
+        flierprops=dict(marker='+', markeredgecolor='black', markersize=6),
+    )
+    plt.xlabel("Rate (Hz)")
+    plt.ylabel("Population")
+    plt.grid(axis="x", alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+plot_population_boxplots(
+    results,
+    population_order=["GPe", "STN", "GPi", "TH", "PYR", "FSI", "dStr", "iStr"],
+)
+#%%
+# 2. ISI CV
+
+irregularity_results = compute_irregularity_all_populations(
+    population_voltages=population_voltages,
+    dt_ms=1.0,
+    spike_height_map={
+        "GPe": -20.0,
+        "GPi": -20.0,
+        "TH": -20.0,
+        "STN": -20.0,
+        "PYR": 0.0,
+        "FSI": -20.0,
+        "dStr": -20.0,
+        "iStr": -20.0,
+    },
+    refractory_ms=2.0,
+    min_spikes_for_cv=2,
+)
+
+
+def plot_irregularity_boxplots(
+    results,
+    population_order=None,
+    figsize=(8, 6),
+    title="Irregularity by population (CV_ISI)",
+    xlabel="CV of ISI",
+    ylabel="Population",
+    xlim=None,
+):
+    if population_order is None:
+        population_order = list(results.keys())
+
+    labels = []
+    data = []
+
+    for pop in population_order:
+        if pop not in results:
+            continue
+        vals = results[pop]["cv_isi"]
+        vals = vals[np.isfinite(vals)]
+        labels.append(pop)
+        data.append(vals)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    bp = ax.boxplot(
+        data,
+        vert=False,
+        tick_labels=labels,
+        patch_artist=True,
+        showmeans=True,
+        meanprops=dict(marker='*', markeredgecolor='black', markersize=7),
+        medianprops=dict(color='black', linewidth=1.8),
+        whiskerprops=dict(linewidth=1.6),
+        capprops=dict(linewidth=1.6),
+        boxprops=dict(linewidth=1.6),
+        flierprops=dict(marker='+', markeredgecolor='black', markersize=6),
+    )
+
+    colors = [
+        "#6baed6", "#74c476", "#9ecae1", "#fdd835",
+        "#fdae6b", "#9edae5", "#c7e9c0", "#fcbba1"
+    ]
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.95)
+
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="x", alpha=0.3)
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_irregularity_boxplots(
+    irregularity_results,
+    population_order=["GPe", "STN", "GPi", "TH", "PYR", "FSI", "dStr", "iStr"],
+    xlim=(0, 2.5),
+)
+
+# %%
+# 3. PSD GPi
+# extract spike times from all neurons in nucleus
+gpi_spike_times = extract_population_spike_times(V4, dt_ms=1.0, spike_height=0.0, refractory_ms=2.0)
+
+# calculate rate by computing average spikes per bin
+t_rate, gpi_rate = population_rate_from_spike_times(
+    gpi_spike_times,
+    tmax_ms= tmax,
+    bin_ms= 1.0,
+    n_neurons=n_gpi
+)
+
+# smoothed rate
+gpi_rate_smooth = smooth_rate(gpi_rate, sigma_ms=2.0, bin_ms=1.0)
+
+# Welch PSD
+freqs, psd = welch_psd(
+    gpi_rate_smooth, #check whether rate smoothed or not is better
+    dt_ms=1.0,
+    nperseg=512,
+    noverlap=256
+)
+# plotted
+plt.figure(figsize=(6,4))
+plt.plot(freqs, psd)
+plt.xlim(0, 50)
+plt.xlabel("Frequency (Hz)")
+plt.ylabel("Power")
+plt.title("GPi population-rate PSD (Welch)")
+plt.show()
+
+plt.figure(figsize=(8,3))
+plt.plot(t_rate, gpi_rate, label="raw population rate")
+plt.plot(t_rate, gpi_rate_smooth, label="smoothed population rate")
+plt.xlabel("Time (ms)")
+plt.ylabel("Rate (Hz)")
+plt.title("GPi population rate")
+plt.legend()
+plt.show()
+
+
+
 
 # %%
