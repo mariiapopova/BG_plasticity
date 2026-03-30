@@ -3,6 +3,7 @@ import jax
 from jax import jit
 from jax import random
 import jax.numpy as jnp
+from functools import partial
 
 # gating variable functions
 #STN
@@ -211,6 +212,57 @@ def w_matrix(n, k):
     W = W.at[post_idx, pre_idx].set(1.0)
 
     return W
+def w_matrix_random(key, n, p, k):
+    W = jnp.zeros((p, n), dtype=jnp.float32)
+
+    def connect_one_target(i, key):
+        idx = jax.random.choice(key, n, shape=(k,), replace=False)
+        return W[i].at[idx].set(1.0)
+
+    keys = jax.random.split(key, p)
+
+    W = jax.vmap(connect_one_target)(jnp.arange(p), keys)
+
+    return W
+
+
+# creating a connectitvity matrix 
+def init_connectivity_convergence(key,n_post,n_pre,wsyn,
+                                  convergence,dtype=jnp.float32,):
+
+    keys = jax.random.split(key, n_post)
+
+    # for each postsynaptic neuron randomly choose distinct presynaptic indices
+    chosen_pre = jax.vmap(
+        lambda k: jax.random.choice(k, n_pre, shape=(convergence,), replace=False)
+    )(keys)  # shape: (n_post, convergence)
+
+    W = jnp.zeros((n_post, n_pre), dtype=dtype)
+    post_idx = jnp.repeat(jnp.arange(n_post)[:, None], convergence, axis=1)
+
+    W = W.at[post_idx, chosen_pre].set(wsyn)
+    return W
+
+
+def init_connectivity_divergence(key,n_post,n_pre,wsyn,
+                                divergence,dtype=jnp.float32,):
+
+
+    keys = jax.random.split(key, n_pre)
+
+    # for each presynaptic neuron randomly choose distinct postsynaptic indices
+    chosen_post = jax.vmap(
+        lambda k: jax.random.choice(k, n_post, shape=(divergence,), replace=False)
+    )(keys)  # shape: (n_pre, divergence)
+
+    W = jnp.zeros((n_post, n_pre), dtype=dtype)
+    pre_idx = jnp.repeat(jnp.arange(n_pre)[:, None], divergence, axis=1)
+
+    W = W.at[chosen_post, pre_idx].set(wsyn)
+    return W
+
+
+
 
 # dopamine scaling from CTX to Str
 def cD1(DA, AD1=10.0, lambda_str=7.5):

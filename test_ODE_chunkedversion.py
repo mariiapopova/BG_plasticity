@@ -22,14 +22,15 @@ print(jax.devices())
 #%%
 # define neuron parameters 
 #number of neurons per nucleus
-n_th = 4
-n_stn = 4
-n_gpe = 4
-n_gpi = 4
-n_dstr = 4
-n_istr = 4
-n_ctx_fsi = 2
-n_ctx_pyr = 20
+default_n = 4
+n_th = default_n
+n_stn = default_n
+n_gpe = default_n
+n_gpi = default_n
+n_dstr = default_n
+n_istr = default_n
+n_ctx_fsi = default_n * 2 #scale to santaniello
+n_ctx_pyr = default_n * 20 #scale to santaniello
 
 # pd (pd = 1) or healthy (pd = 0)
 pd = 0
@@ -64,11 +65,11 @@ params = {
     # specific cortex params
     # in order of CTX (PYR), CTX (FSI)
     #"diam": jnp.array([96, 67]), "L": jnp.array([96, 67]), "Ra": 100, "nseg": 1, # geometry
-    "vtraub": jnp.array([-55, -55]), "gnabar": jnp.array([50, 50]), "gkbar": jnp.array([5, 10]), # mchh2
+    #"vtraub": jnp.array([-55, -55]), "gnabar": jnp.array([50, 50]), "gkbar": jnp.array([5, 10]), # mchh2
     # just CTX (PYR)
-    "gkbar_m": 0.03, # m current
-    "depth": 1, "tau_r": 5, "cainf": 2.4e-4, "gcabar": 0.4, # calcium dynamics
-    "cao": 2 , "celsius": 36, "R": 8.314462618, "FARADAY": 96485.3321, # calcium dynamics
+    #"gkbar_m": 0.03, # m current
+    #"depth": 1, "tau_r": 5, "cainf": 2.4e-4, "gcabar": 0.4, # calcium dynamics
+    #"cao": 2 , "celsius": 36, "R": 8.314462618, "FARADAY": 96485.3321, # calcium dynamics
 
     
     # synapse params (Rubin, 2004)
@@ -88,10 +89,17 @@ params = {
 
     # synapse params ctx (Santiniello, 2019)
     # in order of Ipyr, Ifsi
-    "alphactx": jnp.array([0.55 , 2.5]),
-    "gsynctx": jnp.array([0.27, 0.36, 0.1, 0.29]), # in order of Ipypy, Ipyfsi, Ififi, Ifipy
+    #"alphactx": jnp.array([0.55 , 2.5]),
+    "gsynctx": jnp.array([0.3, 0.3, 1, 1, (0.07-0.044*pd), (0.07-0.044*pd), 0.3, 0.08]),
+    #"gsynctx": jnp.array([9, 0.8, 0.5, 7.3,0.35, (0.35-0.3*pd), 0.35, 0.35]),
+    #"gsynctx": jnp.array([0.27, 0.36, 0.1, 0.29,0.07, (0.07-0.044*pd), 0.15, 0.15]), # WHY O.27 and 0.1!!!! why 0.15, like my code?
     "Esynctx": jnp.array([0, -80]),
-    "tau_ctx": jnp.array([5.26 , 5.56]),
+    #"tau_ctx": jnp.array([5.26 , 5.56]),
+
+    #thalamic synapses
+    "gsynth": jnp.array([0.3]),
+    "Esynth": jnp.array([0]),
+
 
     # stdp params
     "tau_pre": 12.0,
@@ -143,15 +151,22 @@ params = {
     
     # all-to-all connectivity in FSI-FSI CTX
     "w_fsi": jnp.ones((n_ctx_fsi, n_ctx_fsi), dtype=jnp.float32) - jnp.eye(n_ctx_fsi, dtype=jnp.float32),
-    # all-to-five connectivity in PYR-PYR CTX
-    "w_pyr": w_matrix(n = n_ctx_pyr, k = 5),
+    # 1 : 5 connectivity in PYR - PYR 
+    "w_pyr": init_connectivity_divergence(key = jax.random.PRNGKey(0), n_post=n_ctx_pyr, n_pre=n_ctx_pyr,wsyn=9, divergence=6),
     # all-to-all connectivity in PYR-FSI CTX
     "w_pyr_fsi": jnp.ones((n_ctx_fsi, n_ctx_pyr), dtype=jnp.float32),
     # all-to-all connectivity in FSI-PYR CTX
     "w_fsi_pyr": jnp.ones((n_ctx_pyr, n_ctx_fsi), dtype=jnp.float32),
     # all-to-all in PYR CTX - Str
     "w_pyr_str":  jnp.ones((n_dstr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA),
+    # 4 : 1 connectivity in PYR - TH
+    "w_pyr_th": init_connectivity_convergence(key = jax.random.PRNGKey(0), n_post=n_th, n_pre=n_ctx_pyr,wsyn=1, convergence=4),
+    # 1 : 6 connectivity in TH - PYR 
+    "w_th_pyr": init_connectivity_divergence(key = jax.random.PRNGKey(0), n_post=n_ctx_pyr, n_pre=n_th,wsyn=5, divergence=6),
+    "w_pyr_stn": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_stn, k = 5),
+    "w_th_fsi": init_connectivity_divergence(key = jax.random.PRNGKey(0), n_post=n_ctx_fsi,n_pre=n_th,wsyn=1, divergence = 2),
 }
+
 
 # defining the functions for ODEterm
 def gpe_rhs(t, y, args):
@@ -161,6 +176,7 @@ def gpe_rhs(t, y, args):
     V1  = y["V1_th"]
     H1  = y["H1_th"]
     R1  = y["R1_th"]
+    S1  = y["S1_th"]
 
     # STN
     V2  = y["V2_stn"]   
@@ -209,23 +225,49 @@ def gpe_rhs(t, y, args):
     S5i_2 = y["S52_istr"]
     Z5i_2 = y["Z52_istr"]
 
-    # CTX PYR & FSI
+    # CTX M1 PYR & FSI
     # PYR
     V6 = y["V6_ctx"]
-    M6 = y["M6_ctx"]
-    N6 = y["N6_ctx"]
-    H6 = y["H6_ctx"]
-    MM6 = y["MM6_ctx"]
-    Hca6 = y["Hca6_ctx"]
-    cai6 = y["cai6_ctx"]
+    N6  = y["N6_ctx"]
+    H6  = y["H6_ctx"]
+    R6  = y["R6_ctx"] 
+    C6  = y["C6_ctx"]
+    CA6 = y["CA6_ctx"]
+    # M6 = y["M6_ctx"]
+    # N6 = y["N6_ctx"]
+    # H6 = y["H6_ctx"]
+    # MM6 = y["MM6_ctx"]
+    # Hca6 = y["Hca6_ctx"]
+    # cai6 = y["cai6_ctx"]
     S6 = y["S6_ctx"]
     
     #FSI
     V7 = y["V7_ctx"]
-    M7 = y["M7_ctx"]
-    N7 = y["N7_ctx"]
-    H7 = y["H7_ctx"]
+    N7  = y["N7_ctx"]
+    H7  = y["H7_ctx"]
+    R7  = y["R7_ctx"] 
+    C7  = y["C7_ctx"]
+    CA7 = y["CA7_ctx"]
+    # M7 = y["M7_ctx"]
+    # N7 = y["N7_ctx"]
+    # H7 = y["H7_ctx"]
     S7 = y["S7_ctx"]
+
+    # S1 PYR & FSI
+    V8 = y["V8_ctx"]
+    N8  = y["N8_ctx"]
+    H8  = y["H8_ctx"]
+    R8  = y["R8_ctx"] 
+    C8  = y["C8_ctx"]
+    CA8 = y["CA8_ctx"]
+
+    V9 = y["V9_ctx"]
+    N9  = y["N9_ctx"]
+    H9  = y["H9_ctx"]
+    R9  = y["R9_ctx"] 
+    C9  = y["C9_ctx"]
+    CA9 = y["CA9_ctx"]
+
 
     # STDP state variables
     x_pre = y["x_pre"]
@@ -256,12 +298,16 @@ def gpe_rhs(t, y, args):
     gpeak = params["gpeak"]; tau = params["tau"]
     gpeak1 = params["gpeak1"]
     #diam = params["diam"]; L = params["L"]; Ra = params["Ra"];nseg = params["nseg"]
-    vtraub = params["vtraub"];gnabar = params["gnabar"]; gkbar = params["gkbar"]
-    gkbar_m = params["gkbar_m"]
-    depth = params["depth"]; tau_r = params["tau_r"]; cainf = params["cainf"]; gcabar = params["gcabar"]
-    cao = params["cao"];  celsius = params["celsius"]; R = params["R"]; FARADAY  =params["FARADAY"]
+    #vtraub = params["vtraub"];gnabar = params["gnabar"]; gkbar = params["gkbar"]
+    #gkbar_m = params["gkbar_m"]
+    #depth = params["depth"]; tau_r = params["tau_r"]; cainf = params["cainf"]; gcabar = params["gcabar"]
+    #cao = params["cao"];  celsius = params["celsius"]; R = params["R"]; FARADAY  =params["FARADAY"]
 
-    alphactx = params["alphactx"];  gsynctx = params["gsynctx"]; Esynctx = params["Esynctx"]; tau_ctx = params["tau_ctx"]
+    #alphactx = params["alphactx"]
+    gsynctx = params["gsynctx"]; Esynctx = params["Esynctx"]
+    # tau_ctx = params["tau_ctx"]
+
+    gsynth = params["gsynth"]; Esynth = params["Esynth"]
 
     tau_pre = params["tau_pre"]
     tau_post = params["tau_post"]
@@ -281,6 +327,10 @@ def gpe_rhs(t, y, args):
     w_pyr_fsi = params["w_pyr_fsi"]
     w_fsi_pyr = params["w_fsi_pyr"]
     w_pyr_str = params["w_pyr_str"]
+    w_pyr_th = params["w_pyr_th"]
+    w_th_pyr = params["w_th_pyr"]
+    w_pyr_stn = params["w_pyr_stn"]
+    w_th_fsi = params["w_th_fsi"] 
 
 
     # gating steady states & taus from V
@@ -324,24 +374,76 @@ def gpe_rhs(t, y, args):
     th4 = gpe_tauh(V4)
     tr4 = 30.0
 
-    m6 = ctx_minf(V6, vtraub[0])
-    n6 = ctx_ninf(V6, vtraub[0])
-    h6 = ctx_hinf(V6, vtraub[0])
-    tm6 = ctx_taum(V6, vtraub[0])
-    tn6 = ctx_taun(V6, vtraub[0])
-    th6 = ctx_tauh(V6, vtraub[0])
-    m7 = ctx_minf(V7, vtraub[1])
-    n7 = ctx_ninf(V7, vtraub[1])
-    h7 = ctx_hinf(V7, vtraub[1])
-    tm7 = ctx_taum(V7, vtraub[1])
-    tn7 = ctx_taun(V7, vtraub[1])
-    th7 = ctx_tauh(V7, vtraub[1])
+    r6   = stn_rinf(V6)
+    n6   = stn_ninf(V6)
+    m6   = stn_minf(V6)
+    h6   = stn_hinf(V6)
+    c6   = stn_cinf(V6)
+    a6   = stn_ainf(V6)
+    b6   = stn_binf(V6)
 
-    mm6 = ctx_minf_m(V6)
-    tmm6 = ctx_taum_m(V6)
-    mca6 = ctx_minf_ca(V6)
-    hca6 = ctx_hinf_ca(V6)
-    thca6 = ctx_tauh_ca(V6)
+    tr6  = stn_taur(V6)
+    tn6  = stn_taun(V6)
+    th6  = stn_tauh(V6)
+    tc6  = stn_tauc(V6)
+
+    r7   = stn_rinf(V7)
+    n7   = stn_ninf(V7)
+    m7   = stn_minf(V7)
+    h7   = stn_hinf(V7)
+    c7   = stn_cinf(V7)
+    a7   = stn_ainf(V7)
+    b7   = stn_binf(V7)
+
+    tr7  = stn_taur(V7)
+    tn7  = stn_taun(V7)
+    th7  = stn_tauh(V7)
+    tc7 = stn_tauc(V7)
+
+    r8   = stn_rinf(V8)
+    n8   = stn_ninf(V8)
+    m8   = stn_minf(V8)
+    h8   = stn_hinf(V8)
+    c8   = stn_cinf(V8)
+    a8   = stn_ainf(V8)
+    b8   = stn_binf(V8)
+
+    tr8  = stn_taur(V8)
+    tn8  = stn_taun(V8)
+    th8  = stn_tauh(V8)
+    tc8  = stn_tauc(V8)
+
+    r9   = stn_rinf(V9)
+    n9   = stn_ninf(V9)
+    m9   = stn_minf(V9)
+    h9   = stn_hinf(V9)
+    c9   = stn_cinf(V9)
+    a9   = stn_ainf(V9)
+    b9   = stn_binf(V9)
+
+    tr9  = stn_taur(V9)
+    tn9  = stn_taun(V9)
+    th9  = stn_tauh(V9)
+    tc9 = stn_tauc(V9)
+
+    #m6 = ctx_minf(V6, vtraub[0])
+    #n6 = ctx_ninf(V6, vtraub[0])
+    #h6 = ctx_hinf(V6, vtraub[0])
+    #tm6 = ctx_taum(V6, vtraub[0])
+    #tn6 = ctx_taun(V6, vtraub[0])
+    #th6 = ctx_tauh(V6, vtraub[0])
+    #m7 = ctx_minf(V7, vtraub[1])
+    #n7 = ctx_ninf(V7, vtraub[1])
+    #h7 = ctx_hinf(V7, vtraub[1])
+    #tm7 = ctx_taum(V7, vtraub[1])
+    #tn7 = ctx_taun(V7, vtraub[1])
+    #th7 = ctx_tauh(V7, vtraub[1])
+
+    #mm6 = ctx_minf_m(V6)
+    #tmm6 = ctx_taum_m(V6)
+    #mca6 = ctx_minf_ca(V6)
+    #hca6 = ctx_hinf_ca(V6)
+    #thca6 = ctx_tauh_ca(V6)
 
 
 
@@ -392,39 +494,89 @@ def gpe_rhs(t, y, args):
     Ik5d =  gk[4]  * (n5d**4) * (V5d - Ek[4])
     Il5d =  gl[4]  * (V5d - El[4]) 
     Im5d = (2.6 - 1.1 * pd) * gm * p5d * (V5d - Em)
+    Iappstrd = 0
 
     Ina5i = gna[4] * (m5i**3) * h5i * (V5i - Ena[4])
     Ik5i =  gk[4]  * (n5i**4) * (V5i - Ek[4])
     Il5i =  gl[4]  * (V5i - El[4]) 
     Im5i = (2.6 - 1.1 * pd) * gm * p5i * (V5i - Em)
+    Iappstri = 0
 
     # currents cortex
     # CTX PYR
-    Il6 = gl[5] * (V6 - El[5])
-    Ina6 = gnabar[0] * (M6**3) * H6 * (V6 - Ena[5])
-    Ik6 =  gkbar[0]  * (N6**4) * (V6 - Ek[5])
-    Im6 = gkbar_m * MM6 * (V6 - Ek[5])
-    carev = 1e3 * (R *(celsius+273.15)) / (2 * FARADAY) * jnp.log (cao/cai6)  # calcium dynamics
-    Ica6 = gcabar * (mca6**2) * Hca6 * (V6 - carev)   # calcium dynamics
+    #Il6 = gl[5] * (V6 - El[5])
+    #Ina6 = gnabar[0] * (M6**3) * H6 * (V6 - Ena[5])
+    #Ik6 =  gkbar[0]  * (N6**4) * (V6 - Ek[5])
+    #Im6 = gkbar_m * MM6 * (V6 - Ek[5])
+    #carev = 1e3 * (R *(celsius+273.15)) / (2 * FARADAY) * jnp.log (cao/cai6)  # calcium dynamics
+    #Ica6 = gcabar * (mca6**2) * Hca6 * (V6 - carev)   # calcium dynamics
    # applied current 
-    Iappctx6 = 5
+    #Iappctx6 = 5
 
     # CTX FSI
-    Il7 = gl[6] * (V7 - El[6])
-    Ina7 = gnabar[1] * (M7**3) * H7 * (V7 - Ena[6])
-    Ik7 =  gkbar[1]  * (N7**4) * (V7 - Ek[6])
+    #Il7 = gl[6] * (V7 - El[6])
+    #Ina7 = gnabar[1] * (M7**3) * H7 * (V7 - Ena[6])
+    #Ik7 =  gkbar[1]  * (N7**4) * (V7 - Ek[6])
 
    # applied current 
-    Iappctx7 = 3
+    #Iappctx7 = 3
+
+    #currents cortex - like stn
+    # CTX PYR
+    Il6   = gl[1]   * (V6 - El[1])
+    Ik6   = gk[1]   * (N6**4) * (V6 - Ek[1])
+    Ina6  = gna[1]  * (m6**3) * H6 * (V6 - Ena[1])
+    It6  = gt[1]   * (a6**3) * (b6**2) * (V6 - Eca[1])   
+    Ica6  = gca[1]  * (c6**2) * (V6 - Eca[1])
+    Iahp6 = gahp[1] * (V6 - Ek[1]) * (CA6 / (CA6 + k1[1]))
+    # applied current 
+    Iappctx6 = 0
+
+    # CTX FSI
+    Il7   = gl[1]   * (V7 - El[1])
+    Ik7   = gk[1]   * (N7**4) * (V7 - Ek[1])
+    Ina7  = gna[1]  * (m7**3) * H7 * (V7 - Ena[1])
+    It7  = gt[1]   * (a7**3) * (b7**2) * (V7 - Eca[1])   
+    Ica7  = gca[1]  * (c7**2) * (V7 - Eca[1])
+    Iahp7 = gahp[1] * (V7 - Ek[1]) * (CA7 / (CA7 + k1[1]))
+    # applied current 
+    Iappctx7 = 0
+
+        #currents cortex - like stn
+    # CTX PYR
+    Il8   = gl[1]   * (V8 - El[1])
+    Ik8   = gk[1]   * (N8**4) * (V8 - Ek[1])
+    Ina8  = gna[1]  * (m8**3) * H8 * (V8 - Ena[1])
+    It8  = gt[1]   * (a8**3) * (b8**2) * (V8 - Eca[1])   
+    Ica8  = gca[1]  * (c8**2) * (V8 - Eca[1])
+    Iahp8 = gahp[1] * (V8 - Ek[1]) * (CA8 / (CA8 + k1[1]))
+    # applied current 
+    Iappctx8 = 0
+
+    # CTX FSI
+    Il9   = gl[1]   * (V9 - El[1])
+    Ik9   = gk[1]   * (N9**4) * (V9 - Ek[1])
+    Ina9  = gna[1]  * (m9**3) * H9 * (V9 - Ena[1])
+    It9  = gt[1]   * (a9**3) * (b9**2) * (V9 - Eca[1])   
+    Ica9  = gca[1]  * (c9**2) * (V9 - Eca[1])
+    Iahp9 = gahp[1] * (V9 - Ek[1]) * (CA9 / (CA9 + k1[1]))
+    # applied current 
+    Iappctx9 = 0
 
     # synapses with connectivity matrices
 
     # presynaptic activation
+    H_th = Hinf(V1, theta=-20.0)
     H_gpe = Hinf(V3, theta=30.0)
     H_stn = Hinf(V2, theta=20.0)
     H_gpi = Hinf(V4, theta=20.0)
     H_istr = Hinf(V5i, theta=20.0)
     H_dstr = Hinf(V5d, theta=20.0)
+    H_ctxpyr = Hinf(V6, theta=30.0)
+    H_ctxfi = Hinf(V7, theta=30.0)
+
+    # AMPA synapses (Sadeghi, 2024)
+    dS1dt = A[0] * (1 - S1) * H_th - B[0] * S1 #like rubin and terman gpi
 
     # differential equations synapses
     # STN synapses (2nd order alpha synapses)
@@ -474,9 +626,12 @@ def gpe_rhs(t, y, args):
 
     # CTX
     # PYR AMPA synapses (Santiniello, 2019)
-    dS6dt = alphactx[0] * (1 + jnp.tanh((V6)/ 4))*(1.0 - S6) - (S6 / tau_ctx[0]) 
+    # dS6dt = alphactx[0] * (1 + jnp.tanh((V6)/ 4))*(1.0 - S6) - (S6 / tau_ctx[0]) 
     # FSI GABA synapses
-    dS7dt = alphactx[1] * (1 + jnp.tanh((V7)/ 4))*(1.0 - S7) - (S7 / tau_ctx[1]) 
+    # dS7dt = alphactx[1] * (1 + jnp.tanh((V7)/ 4))*(1.0 - S7) - (S7 / tau_ctx[1]) 
+
+    dS6dt = A[2] * (1 - S6) * H_ctxpyr - B[2] * S6 #like rubin and terman gpi
+    dS7dt = A[2] * (1 - S7) * H_ctxfi - B[2] * S7 #like rubin and terman gpi
 
     # synaptic currents using those gating variables
     Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4))
@@ -487,13 +642,18 @@ def gpe_rhs(t, y, args):
     Isngi = 0.5 *  (gsyn[5] * (V4 - Esyn[5]) *  (w_stn_gpi  @ S2))
     Istrge = gsynstr[0] * (V3 - Esynstr[0]) * (w_istr_gpe  @ S5i_2) # from in FOG: Istrge = 0.1 * ... - why?
     Istrgi = gsynstr[1] * (V4 - Esynstr[1]) * (w_dstr_gpi  @ S5d_2)
-    Istrd = (ggaba/3) * (V5d - Esynstr[0]) * S5d
-    Istri = (ggaba/4) * (V5i - Esynstr[1]) * S5i
-    Ipypy = gsynctx[0] * (V6 - Esynctx[0]) * (w_pyr  @ S6) / 5 # change to normalizing by number of presynaptic input neurons
-    Ipyfi = gsynctx[1] * (V7 - Esynctx[1]) * (w_pyr_fsi  @ S6) / 20
-    Ififi = gsynctx[2] * (V7 - Esynctx[1]) * (w_fsi  @ S7) / 2
-    Ifipy = gsynctx[3] * (V6 - Esynctx[0]) * (w_fsi_pyr  @ S7) /2
-    Ipystr = gsynctx[0] * (V5d - Esynctx[0]) * (w_pyr_str  @ S6) / 20 # check for valid parameters here 
+    Istrd = (ggaba/3) * (V5d - Esynstr[0]) * (w_dstr @ S5d)
+    Istri = (ggaba/4) * (V5i - Esynstr[1]) * (w_istr @ S5i)
+    Ipypy = 0.025*gsynctx[0] * (V6 - Esynctx[0]) * (w_pyr  @ S6) # change to normalizing by number of presynaptic input neurons
+    Ipyfi = 0.025*gsynctx[1] * (V7 - Esynctx[0]) * (w_pyr_fsi  @ S6) 
+    Ififi = 0.25*gsynctx[2] * (V7 - Esynctx[1]) * (w_fsi  @ S7) 
+    Ifipy = 0.25*gsynctx[3] * (V6 - Esynctx[1]) * (w_fsi_pyr  @ S7) 
+    Ipystrd = 0.2*gsynctx[5] * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
+    Ipystri = 0.2*gsynctx[4] * (V5i - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
+    Ipysn = 0.2*gsynctx[6] * (V2 - Esynctx[0]) * (w_pyr_stn  @ S6)  # check for valid parameters here 
+    Ipyth = 0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyr_th  @ S6)  # check for valid parameters here 
+    Ithpy = gsynth[0] * (V6 - Esynth[0]) * (w_th_pyr  @ S1)  # check for valid parameters here 
+    Ithfi = gsynth[0] * (V7 - Esynth[0]) * (w_th_fsi  @ S1)  # check for valid parameters here 
 
 
     # differential equations th
@@ -524,37 +684,68 @@ def gpe_rhs(t, y, args):
     dCA4dt = 1e-4 * (-Ica4 - It4 - kca[2] * CA4)
 
     # differential equations str
-    dV5ddt = (-Il5d - Ik5d - Ina5d - Im5d - Istrd - Ipystr) / Cm
+    dV5ddt = (-Il5d - Ik5d - Ina5d - Im5d - Istrd - Ipystrd +Iappstrd) / Cm
     dm5ddt = str_alpham(V5d) * (1 - m5d) - str_betam(V5d) * m5d
     dh5ddt = str_alphah(V5d) * (1 - h5d) - str_betah(V5d) * h5d
     dn5ddt = str_alphan(V5d) * (1 - n5d) - str_betan(V5d) * n5d
     dp5ddt = str_alphap(V5d) * (1 - p5d) - str_betap(V5d) * p5d
 
-    dV5idt = (-Il5i - Ik5i - Ina5i - Im5i - Istri) / Cm
+    dV5idt = (-Il5i - Ik5i - Ina5i - Im5i - Istri - Ipystri +Iappstri) / Cm
     dm5idt = str_alpham(V5i) * (1 - m5i) - str_betam(V5i) * m5i
     dh5idt = str_alphah(V5i) * (1 - h5i) - str_betah(V5i) * h5i
     dn5idt = str_alphan(V5i) * (1 - n5i) - str_betan(V5i) * n5i
     dp5idt = str_alphap(V5i) * (1 - p5i) - str_betap(V5i) * p5i
 
-    # differential equations CTX
-    dV6dt = (-Il6 - Ik6 - Ina6 - Im6 - Ica6 - Ipypy - Ifipy + Iappctx6) / Cm
-    dM6dt = (m6 - M6) / tm6
-    dN6dt = (n6 - N6) / tn6
-    dH6dt = (h6 - H6) / th6
-    dMM6dt = (mm6 - MM6) / tmm6
-    dHca6dt = (hca6 -Hca6) / thca6
-    dcai6dt = ca_drive(Ica6, FARADAY, depth) + (cainf - cai6) / tau_r
+    # differential equations CTX M1
+    dV6dt   = (-Il6 - Ik6 - Ina6 - It6 - Ica6 - Iahp6 - Ithpy - Ipypy - Ifipy + Iappctx6) / Cm
+    dN6dt   = 0.75 * (n6 - N6) / tn6
+    dH6dt   = 0.75 * (h6 - H6) / th6
+    dR6dt   = 0.2 * (r6 - R6) / tr6
+    dCA6dt  = 3.75 * 1e-5 * (-Ica6 - It6 - kca[1] * CA6)
+    dC6dt   = 0.08 * (c6 - C6) / tc6
+
+    dV7dt   = (-Il7 - Ik7 - Ina7 - It7 - Ica7 - Iahp7 - Ipyfi - Ififi - Ithfi + Iappctx7) / Cm
+    dN7dt   = 0.75 * (n7 - N7) / tn7
+    dH7dt   = 0.75 * (h7 - H7) / th7
+    dR7dt   = 0.2 * (r7 - R7) / tr7
+    dCA7dt  = 3.75 * 1e-5 * (-Ica7 - It7 - kca[1] * CA7)
+    dC7dt   = 0.08 * (c7 - C7) / tc7
+
+    #dV6dt = (-Il6 - Ik6 - Ina6 - Im6 - Ica6 - Ipypy - Ifipy + Iappctx6) / Cm
+    #dM6dt = (m6 - M6) / tm6
+    #dN6dt = (n6 - N6) / tn6
+    #dH6dt = (h6 - H6) / th6
+    #dMM6dt = (mm6 - MM6) / tmm6
+    #dHca6dt = (hca6 -Hca6) / thca6
+    #dcai6dt = ca_drive(Ica6, FARADAY, depth) + (cainf - cai6) / tau_r
     
 
-    dV7dt = (-Il7 - Ik7 - Ina7 + Iappctx7) / Cm  # took out: Ipyfi & Ififi (too strong?)
-    dM7dt = (m7 - M7) / tm7
-    dN7dt = (n7 - N7) / tn7
-    dH7dt = (h7 - H7) / th7
+    #dV7dt = (-Il7 - Ik7 - Ina7 + Iappctx7) / Cm  # took out: Ipyfi & Ififi (too strong?)
+    #dM7dt = (m7 - M7) / tm7
+    #dN7dt = (n7 - N7) / tn7
+    #dH7dt = (h7 - H7) / th7
+
+    # differential equations CTX S1
+    dV8dt   = (-Il8 - Ik8 - Ina8 - It8 - Ica8 - Iahp8) / Cm
+    dN8dt   = 0.75 * (n8 - N8) / tn8
+    dH8dt   = 0.75 * (h8 - H8) / th8
+    dR8dt   = 0.2 * (r8 - R8) / tr8
+    dCA8dt  = 3.75 * 1e-5 * (-Ica8 - It8 - kca[1] * CA8)
+    dC8dt   = 0.08 * (c8 - C8) / tc8
+
+    dV9dt   = (-Il9 - Ik9 - Ina9 - It9 - Ica9 - Iahp9) / Cm
+    dN9dt   =  0.75 * (n9 - N9) / tn9
+    dH9dt   =  0.75 * (h9 - H9) / th9
+    dR9dt   = 0.2 * (r9 - R9) / tr9
+    dCA9dt  =  3.75 * 1e-5 * (-Ica9 - It9 - kca[1] * CA9)
+    dC9dt   =  0.08 * (c9 - C9) / tc9
+    
 
     return {
         "V1_th":  dV1dt,
         "H1_th":  dH1dt,
         "R1_th":  dR1dt,
+        "S1_th": dS1dt,
 
         "V2_stn":  dV2dt,
         "N2_stn":  dN2dt,
@@ -602,20 +793,45 @@ def gpe_rhs(t, y, args):
         "Z52_istr": dZ52idt,
 
         "V6_ctx": dV6dt,
-        "M6_ctx": dM6dt,
-        "N6_ctx": dN6dt,
-        "H6_ctx": dH6dt,
-        "MM6_ctx": dMM6dt,
-        "Hca6_ctx": dHca6dt,
-        "cai6_ctx": dcai6dt,
+        "N6_ctx":  dN6dt,
+        "H6_ctx":  dH6dt,
+        "R6_ctx":  dR6dt,
+        "C6_ctx":  dC6dt,
+        "CA6_ctx": dCA6dt,
+        # "M6_ctx": dM6dt,
+        # "N6_ctx": dN6dt,
+        # "H6_ctx": dH6dt,
+        # "MM6_ctx": dMM6dt,
+        # "Hca6_ctx": dHca6dt,
+        # "cai6_ctx": dcai6dt,
         "S6_ctx": dS6dt,
 
         "V7_ctx": dV7dt,
-        "M7_ctx": dM7dt,
-        "N7_ctx": dN7dt,
-        "H7_ctx": dH7dt,
+        "N7_ctx":  dN7dt,
+        "H7_ctx":  dH7dt,
+        "R7_ctx":  dR7dt,
+        "C7_ctx":  dC7dt,
+        "CA7_ctx": dCA7dt,
+        # "M7_ctx": dM7dt,
+        # "N7_ctx": dN7dt,
+        # "H7_ctx": dH7dt,
         "S7_ctx": dS7dt,
+
+        "V8_ctx": dV8dt,
+        "N8_ctx":  dN8dt,
+        "H8_ctx":  dH8dt,
+        "R8_ctx":  dR8dt,
+        "C8_ctx":  dC8dt,
+        "CA8_ctx": dCA8dt,
+
+        "V9_ctx": dV9dt,
+        "N9_ctx":  dN9dt,
+        "H9_ctx":  dH9dt,
+        "R9_ctx":  dR9dt,
+        "C9_ctx":  dC9dt,
+        "CA9_ctx": dCA9dt,
     }
+
 
 
 
@@ -624,8 +840,9 @@ key = jax.random.PRNGKey(0)
 (
     key_v1, key_v2, key_v3, key_v4,
     key_v5d, key_v5i, key_v6, key_v7,
+    key_v8, key_v9,
     key_w
-) = jax.random.split(key, 9)
+) = jax.random.split(key, 11)
 
 V1_init = -62
 V2_init = -62
@@ -633,9 +850,11 @@ V3_init = -62
 V4_init = -62
 V5d_init = -60
 V5i_init = -60
-V6_init = -60
-V7_init = -60
-vtraub = params["vtraub"]
+V6_init = -62
+V7_init = -62
+V8_init = -62
+V9_init = -62
+#vtraub = params["vtraub"]
 
 # noise amplitude in mV
 sigma_init = 2.0
@@ -648,11 +867,14 @@ V5d_0 = V5d_init + sigma_init * jax.random.normal(key_v5d, (n_dstr,))
 V5i_0 = V5i_init + sigma_init * jax.random.normal(key_v5i, (n_istr,))
 V6_0 = V6_init + sigma_init * jax.random.normal(key_v6, (n_ctx_pyr,))
 V7_0 = V7_init + sigma_init * jax.random.normal(key_v7, (n_ctx_fsi,))
+V8_0 = V8_init + sigma_init * jax.random.normal(key_v8, (n_ctx_pyr,))
+V9_0 = V9_init + sigma_init * jax.random.normal(key_v9, (n_ctx_fsi,))
 
 y0 = {
     "V1_th":  V1_0,
     "H1_th":  th_hinf(V1_0),
     "R1_th":  th_rinf(V1_0),
+    "S1_th":  jnp.zeros((n_th,)),
 
     "V2_stn":  V2_0,
     "N2_stn":  stn_ninf(V2_0),
@@ -701,19 +923,44 @@ y0 = {
     "Z52_istr": jnp.zeros((n_istr,)),
 
     "V6_ctx":  V6_0,
-    "N6_ctx":  ctx_ninf(V6_0, vtraub[0]),
-    "H6_ctx":  ctx_hinf(V6_0, vtraub[0]),
-    "M6_ctx":  ctx_minf(V6_0, vtraub[0]),
-    "MM6_ctx": ctx_minf_m(V6_0),
-    "Hca6_ctx": ctx_hinf_ca(V6_0),
-    "cai6_ctx": 2.4e-4 * jnp.ones((n_ctx_pyr,)),
+    "N6_ctx":  stn_ninf(V6_0),
+    "H6_ctx":  stn_hinf(V6_0),
+    "R6_ctx":  stn_rinf(V6_0),
+    "C6_ctx":  stn_cinf(V6_0),
+    "CA6_ctx": jnp.full((n_ctx_pyr,), 0.1),
+    # "N6_ctx":  ctx_ninf(V6_0, vtraub[0]),
+    # "H6_ctx":  ctx_hinf(V6_0, vtraub[0]),
+    # "M6_ctx":  ctx_minf(V6_0, vtraub[0]),
+    # "MM6_ctx": ctx_minf_m(V6_0),
+    # "Hca6_ctx": ctx_hinf_ca(V6_0),
+    # "cai6_ctx": 2.4e-4 * jnp.ones((n_ctx_pyr,)),
     "S6_ctx":  jnp.zeros((n_ctx_pyr,)),
 
     "V7_ctx":  V7_0,
-    "M7_ctx":  ctx_minf(V7_0, vtraub[1]),
-    "H7_ctx":  ctx_hinf(V7_0, vtraub[1]),
-    "N7_ctx":  ctx_ninf(V7_0, vtraub[1]),
+    "N7_ctx":  stn_ninf(V7_0),
+    "H7_ctx":  stn_hinf(V7_0),
+    "R7_ctx":  stn_rinf(V7_0),
+    "C7_ctx":  stn_cinf(V7_0),
+    "CA7_ctx": jnp.full((n_ctx_fsi,), 0.1),
+    # "M7_ctx":  ctx_minf(V7_0, vtraub[1]),
+    # "H7_ctx":  ctx_hinf(V7_0, vtraub[1]),
+    # "N7_ctx":  ctx_ninf(V7_0, vtraub[1]),
     "S7_ctx":  jnp.zeros((n_ctx_fsi,)),
+
+    "V8_ctx":  V8_0,
+    "N8_ctx":  stn_ninf(V8_0),
+    "H8_ctx":  stn_hinf(V8_0),
+    "R8_ctx":  stn_rinf(V8_0),
+    "C8_ctx":  stn_cinf(V8_0),
+    "CA8_ctx": jnp.full((n_ctx_pyr,), 0.1),
+
+    "V9_ctx":  V9_0,
+    "N9_ctx":  stn_ninf(V9_0),
+    "H9_ctx":  stn_hinf(V9_0),
+    "R9_ctx":  stn_rinf(V9_0),
+    "C9_ctx":  stn_cinf(V9_0),
+    "CA9_ctx": jnp.full((n_ctx_fsi,), 0.1),
+
 }
 
 
@@ -763,6 +1010,8 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
     all_V5i= []
     all_V6 = []
     all_V7 = []
+    all_V8 = []
+    all_V9 = []  
     all_W = []
 
     # looping across chunks 
@@ -780,6 +1029,8 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
         all_V5i.append(ys["V5_istr"])
         all_V6.append(ys["V6_ctx"])
         all_V7.append(ys["V7_ctx"])
+        all_V8.append(ys["V8_ctx"])
+        all_V9.append(ys["V9_ctx"])
         all_W.append(ys["W"])
 
         t0 = float(t1)
@@ -794,18 +1045,20 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
         jnp.concatenate(all_V5i),
         jnp.concatenate(all_V6),
         jnp.concatenate(all_V7),
+        jnp.concatenate(all_V8),
+        jnp.concatenate(all_V9),      
         jnp.concatenate(all_W)
     )
 
 
 
 #%% run simulation
-tmax = 1000.0
-chunk_size = 100.0      # 1 second per chunk
+tmax = 100.0
+chunk_size = 10.0      # 1 second per chunk
 dt0 = 0.1
 dt_save = 1.0            # save every 1 ms
 
-ts, V1, V2, V3, V4, V5d, V5i, V6, V7, W = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
+ts, V1, V2, V3, V4, V5d, V5i, V6, V7, V8, V9, W = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
 
 population_voltages = {
     "TH": V1,
@@ -814,8 +1067,10 @@ population_voltages = {
     "GPi": V4,
     "dStr": V5d,
     "iStr": V5i,
-    "PYR": V6,
-    "FSI": V7,
+    "PYR M1": V6,
+    "FSI M1": V7,
+    "PYR S1": V8,
+    "FSI S1": V9,   
 }
 
 #%%
@@ -865,14 +1120,28 @@ plt.show()
 plt.plot(ts, V6[:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
-plt.title("Cortex (PYR)")
+plt.title("Cortex M1 (PYR)")
 plt.show()
 
 # plot to check
 plt.plot(ts, V7[:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
-plt.title("Cortex (FSI)")
+plt.title("Cortex M1 (FSI)")
+plt.show()
+
+# plot to check
+plt.plot(ts, V8[:,2])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("Cortex S1 (PYR)")
+plt.show()
+
+# plot to check
+plt.plot(ts, V9[:,3])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("Cortex S1 (FSI)")
 plt.show()
 
 # plot to check
@@ -892,8 +1161,10 @@ results = compute_metrics_all_populations(
         "GPi": -20.0,
         "TH": -20.0,
         "STN": -20.0,
-        "PYR": 0.0,
-        "FSI": -20.0,
+        "PYR M1": 0.0,
+        "FSI M1": -20.0,
+        "PYR S1": 0.0,
+        "FSI S1": -20.0,
         "dStr": -20.0,
         "iStr": -20.0,
     },
@@ -932,7 +1203,7 @@ def plot_population_boxplots(results, population_order=None):
 
 plot_population_boxplots(
     results,
-    population_order=["GPe", "STN", "GPi", "TH", "PYR", "FSI", "dStr", "iStr"],
+    population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr"],
 )
 #%%
 # 2. ISI CV
@@ -945,8 +1216,10 @@ irregularity_results = compute_irregularity_all_populations(
         "GPi": -20.0,
         "TH": -20.0,
         "STN": -20.0,
-        "PYR": 0.0,
-        "FSI": -20.0,
+        "PYR M1": 0.0,
+        "FSI M1": -20.0,
+        "PYR S1": 0.0,
+        "FSI S1": -20.0,
         "dStr": -20.0,
         "iStr": -20.0,
     },
