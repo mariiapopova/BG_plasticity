@@ -188,6 +188,27 @@ def ca_drive(ica, FARADAY, depth):
     # clamp so it cannot "pump inward" when ica is outward
     return jnp.maximum(drive, 0.0)
 
+# snc
+def snc_minf(V):
+    return 1.0 / (1.0 + jnp.exp(-(V + 25.0) / 12.0))
+
+def snc_taum(V):
+    return 18.0 / (1.0 + jnp.exp((V + 39.0) / 8.0)) + 1.0
+
+def h10_ca(Cai):
+    return 0.00045 / (0.00045 + Cai)
+
+def s_SK(Cai):
+    return (Cai**4.2) / (Cai**4.2 + (3.5e-4)**4.2)
+
+def snc_minf_ca(V):
+    return 1.0 / (1.0 + jnp.exp(-(V + 15.0) / 7.0))
+
+def snc_taum_ca(V):
+    return 7.68 * jnp.exp(-((V + 65.0) / 17.33)**2) + 0.7231
+
+
+
 # synapses
 def Hinf(V, theta):
     return 1/(1+jnp.exp(-(V - theta)/2))

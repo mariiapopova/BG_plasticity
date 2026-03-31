@@ -31,12 +31,15 @@ n_dstr = default_n
 n_istr = default_n
 n_ctx_fsi = default_n * 2 #scale to santaniello
 n_ctx_pyr = default_n * 20 #scale to santaniello
+n_snc = default_n * 4
 
-# pd (pd = 1) or healthy (pd = 0)
-pd = 0
+PD = 0 # healthy or PD condtion
 
-DA = 0.9 # healthy
-#DA = 0.1  # pd
+if PD == 0:
+    DA = 1.0
+else:
+    DA = 0.1 #modulatable
+
 
 # dopamine scaling from CTX to Str
 def cD1(DA, AD1=10.0, lambda_str=7.5):
@@ -50,17 +53,18 @@ def spike_event(V, threshold):
 # parameters in a dict (PyTree)
 params = {
     # membrane params
-    # in order of TH, STN, GPe, GPi, Str, CTX (PYR), CTX (FSI) (1e-5, 0.00015)
+    # in order of TH, STN, GPe, GPi, Str, CTX (PYR), CTX (FSI), SNc
     "Cm": 1.0,
-    "gl": jnp.array([0.05, 2.25, 0.1, 0.1, 0.1, 0.01, 0.15]),  "El": jnp.array([-70, -60, -65, -65, -67, -85, -70]),
-    "gna": jnp.array([3, 37, 120, 120, 100]), "Ena": jnp.array([50, 55, 55, 55, 50, 50, 50]),
-    "gk": jnp.array([5, 45, 30, 30, 80]),  "Ek": jnp.array([-75, -80, -80, -80, -100, -100, -100]),
-    "gt": jnp.array([5, 0.5, 0.5, 0.5]), "Et":0,
-    "gca": jnp.array([0, 2, 0.15, 0.15]), "Eca": jnp.array([0, 140, 120, 120, 120]),
+    "gl": jnp.array([0.05, 2.25, 0.1, 0.1, 0.1, 0.01, 0.15, 0.01]),  "El": jnp.array([-70, -60, -65, -65, -67, -85, -70, -50]),
+    "gna": jnp.array([3, 37, 120, 120, 100, 0, 0, 100]), "Ena": jnp.array([50, 55, 55, 55, 50, 50, 50, 60]),
+    "gk": jnp.array([5, 45, 30, 30, 80, 0, 0]),  "Ek": jnp.array([-75, -80, -80, -80, -100, -100, -100, -90]),
+    "gt": jnp.array([5, 0.5, 0.5, 0.5, 0, 0, 0]), "Et":0,
+    "gca": jnp.array([0, 2, 0.15, 0.15, 0, 0, 0.15]), "Eca": jnp.array([0, 140, 120, 120, 120, 0, 0, 120]),
     "gahp": jnp.array([0, 20, 10, 10]),
     "k1": jnp.array([0, 15, 10, 10]),
     "kca": jnp.array([0, 22.5, 15, 15]),
     "gm": 1,"Em": -100, # for striatum muscarinic current
+    "gsk": 0.25,"gkdr": 3.5, # for SNc calcium dependent k+ current and direct k+ current
 
     # specific cortex params
     # in order of CTX (PYR), CTX (FSI)
@@ -268,6 +272,14 @@ def gpe_rhs(t, y, args):
     C9  = y["C9_ctx"]
     CA9 = y["CA9_ctx"]
 
+    # SNc
+    V10 = y["V10_snc"]
+    M10_na = y["M10_na_snc"]
+    H10_na = y["H10_na_snc"]
+    M10_ca = y["M10_ca_snc"]
+    M10_k = y["M10_k_snc"]
+    CA10 = y["CA10_snc"]
+
 
     # STDP state variables
     x_pre = y["x_pre"]
@@ -294,6 +306,7 @@ def gpe_rhs(t, y, args):
     gsynstr = params["gsynstr"]
     Esynstr = params["Esynstr"]
     ggaba = params["ggaba"]; tau_i = params["tau_i"]
+    gsk = params["gsk"]; gkdr = params["gkdr"]
 
     gpeak = params["gpeak"]; tau = params["tau"]
     gpeak1 = params["gpeak1"]
@@ -445,6 +458,10 @@ def gpe_rhs(t, y, args):
     #hca6 = ctx_hinf_ca(V6)
     #thca6 = ctx_tauh_ca(V6)
 
+    m10 = snc_minf(V10)
+    tm10 = snc_taum(V10)
+    m10_ca = snc_minf_ca(V10)
+    tm10_ca = snc_taum_ca(V10)
 
 
     # thalamic currents
@@ -530,7 +547,7 @@ def gpe_rhs(t, y, args):
     Ica6  = gca[1]  * (c6**2) * (V6 - Eca[1])
     Iahp6 = gahp[1] * (V6 - Ek[1]) * (CA6 / (CA6 + k1[1]))
     # applied current 
-    Iappctx6 = 0
+    Iappctx6 = 10
 
     # CTX FSI
     Il7   = gl[1]   * (V7 - El[1])
@@ -540,9 +557,9 @@ def gpe_rhs(t, y, args):
     Ica7  = gca[1]  * (c7**2) * (V7 - Eca[1])
     Iahp7 = gahp[1] * (V7 - Ek[1]) * (CA7 / (CA7 + k1[1]))
     # applied current 
-    Iappctx7 = 0
+    Iappctx7 = 10
 
-        #currents cortex - like stn
+    #currents cortex - like stn
     # CTX PYR
     Il8   = gl[1]   * (V8 - El[1])
     Ik8   = gk[1]   * (N8**4) * (V8 - Ek[1])
@@ -551,7 +568,7 @@ def gpe_rhs(t, y, args):
     Ica8  = gca[1]  * (c8**2) * (V8 - Eca[1])
     Iahp8 = gahp[1] * (V8 - Ek[1]) * (CA8 / (CA8 + k1[1]))
     # applied current 
-    Iappctx8 = 0
+    Iappctx8 = 5
 
     # CTX FSI
     Il9   = gl[1]   * (V9 - El[1])
@@ -561,7 +578,17 @@ def gpe_rhs(t, y, args):
     Ica9  = gca[1]  * (c9**2) * (V9 - Eca[1])
     Iahp9 = gahp[1] * (V9 - Ek[1]) * (CA9 / (CA9 + k1[1]))
     # applied current 
-    Iappctx9 = 0
+    Iappctx9 = 5
+    
+    # currents SNc (reduced from Chakravarthy, 2021)
+    Il10 = gl[7]   * (V10 - El[7])
+    Ina10 = gna[7] *  (M10_na**3) * H10_na * (V10 - Ena[7])
+    Ikdr10 = gkdr * (M10_k**3) * (V10 - Ek[7])
+    Ica10 = gca[7]  * M10_ca * h10_ca(CA10) * (V10 - Eca[7])
+    Isk10 = gsk * s_SK(CA10) * (V10 - Ek[7])
+
+    Iappsnc = 10
+
 
     # synapses with connectivity matrices
 
@@ -739,6 +766,14 @@ def gpe_rhs(t, y, args):
     dR9dt   = 0.2 * (r9 - R9) / tr9
     dCA9dt  =  3.75 * 1e-5 * (-Ica9 - It9 - kca[1] * CA9)
     dC9dt   =  0.08 * (c9 - C9) / tc9
+
+    # differential equations SNc
+    dV10dt = (-Il10 - Ina10 - Ikdr10 - Isk10 - Ica10 + Iappsnc) / Cm
+    dM10nadt = 1.9651*jnp.exp(1.7127*V10)*(1.0 - M10_na) - 0.0424*jnp.exp(-1.5581*V10)*M10_na
+    dH10nadt = 9.566e-5*jnp.exp(-2.4317*V10)*(1.0 - H10_na) - 0.5296*jnp.exp(1.1868*V10)*H10_na
+    dM10kdt   = (m10 - M10_k) / tm10
+    dM10cadt =(m10_ca - M10_ca) / tm10_ca 
+    dCA10dt = - 1e-5 * Ica10 - (CA10 - 1.88e-4 ) / 20
     
 
     return {
@@ -830,6 +865,13 @@ def gpe_rhs(t, y, args):
         "R9_ctx":  dR9dt,
         "C9_ctx":  dC9dt,
         "CA9_ctx": dCA9dt,
+
+        "V10_snc": dV10dt,
+        "M10_na_snc": dM10nadt,
+        "H10_na_snc": dH10nadt,
+        "M10_ca_snc": dM10cadt,
+        "M10_k_snc": dM10kdt,
+        "CA10_snc": dCA10dt,
     }
 
 
@@ -840,9 +882,9 @@ key = jax.random.PRNGKey(0)
 (
     key_v1, key_v2, key_v3, key_v4,
     key_v5d, key_v5i, key_v6, key_v7,
-    key_v8, key_v9,
+    key_v8, key_v9, key_v10,
     key_w
-) = jax.random.split(key, 11)
+) = jax.random.split(key, 12)
 
 V1_init = -62
 V2_init = -62
@@ -854,6 +896,7 @@ V6_init = -62
 V7_init = -62
 V8_init = -62
 V9_init = -62
+V10_init = -50
 #vtraub = params["vtraub"]
 
 # noise amplitude in mV
@@ -869,6 +912,7 @@ V6_0 = V6_init + sigma_init * jax.random.normal(key_v6, (n_ctx_pyr,))
 V7_0 = V7_init + sigma_init * jax.random.normal(key_v7, (n_ctx_fsi,))
 V8_0 = V8_init + sigma_init * jax.random.normal(key_v8, (n_ctx_pyr,))
 V9_0 = V9_init + sigma_init * jax.random.normal(key_v9, (n_ctx_fsi,))
+V10_0 = V10_init + sigma_init * jax.random.normal(key_v10, (n_snc,))
 
 y0 = {
     "V1_th":  V1_0,
@@ -961,6 +1005,13 @@ y0 = {
     "C9_ctx":  stn_cinf(V9_0),
     "CA9_ctx": jnp.full((n_ctx_fsi,), 0.1),
 
+    "V10_snc":  V10_0,
+    "M10_na_snc": jnp.full((n_snc,), 0.0952),
+    "H10_na_snc": jnp.full((n_snc,), 0.1848),
+    "M10_ca_snc": jnp.full((n_snc,), 0.006271),
+    "M10_k_snc": jnp.full((n_snc,), 0.0932),
+    "CA10_snc": jnp.full((n_snc), 1.88e-4),
+
 }
 
 
@@ -1011,7 +1062,8 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
     all_V6 = []
     all_V7 = []
     all_V8 = []
-    all_V9 = []  
+    all_V9 = []
+    all_V10 = []
     all_W = []
 
     # looping across chunks 
@@ -1031,6 +1083,7 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
         all_V7.append(ys["V7_ctx"])
         all_V8.append(ys["V8_ctx"])
         all_V9.append(ys["V9_ctx"])
+        all_V10.append(ys["V10_snc"])
         all_W.append(ys["W"])
 
         t0 = float(t1)
@@ -1046,7 +1099,8 @@ def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
         jnp.concatenate(all_V6),
         jnp.concatenate(all_V7),
         jnp.concatenate(all_V8),
-        jnp.concatenate(all_V9),      
+        jnp.concatenate(all_V9), 
+        jnp.concatenate(all_V10),     
         jnp.concatenate(all_W)
     )
 
@@ -1058,7 +1112,7 @@ chunk_size = 10.0      # 1 second per chunk
 dt0 = 0.1
 dt_save = 1.0            # save every 1 ms
 
-ts, V1, V2, V3, V4, V5d, V5i, V6, V7, V8, V9, W = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
+ts, V1, V2, V3, V4, V5d, V5i, V6, V7, V8, V9, V10, W = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
 
 population_voltages = {
     "TH": V1,
@@ -1070,7 +1124,8 @@ population_voltages = {
     "PYR M1": V6,
     "FSI M1": V7,
     "PYR S1": V8,
-    "FSI S1": V9,   
+    "FSI S1": V9,  
+    "SNc" : V10,
 }
 
 #%%
@@ -1142,6 +1197,13 @@ plt.plot(ts, V9[:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("Cortex S1 (FSI)")
+plt.show()
+
+# plot to check
+plt.plot(ts, V10[:,0])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("SNc")
 plt.show()
 
 # plot to check
