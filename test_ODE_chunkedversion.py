@@ -33,9 +33,9 @@ n_ctx_fsi = default_n * 2 #scale to santaniello
 n_ctx_pyr = default_n * 20 #scale to santaniello
 n_snc = default_n * 4
 
-PD = 0 # healthy or PD condtion
+pd = 0 # healthy or PD condtion
 
-if PD == 0:
+if pd == 0:
     DA = 1.0
 else:
     DA = 0.1 #modulatable
@@ -53,7 +53,7 @@ def spike_event(V, threshold):
 # parameters in a dict (PyTree)
 params = {
     # membrane params
-    # in order of TH, STN, GPe, GPi, Str, CTX (PYR), CTX (FSI), SNc
+    # in order of TH, STN, GPe, GPi, Str, CTX (PYR), CTX (FSI), SNc (from Nair, 2022)
     "Cm": 1.0,
     "gl": jnp.array([0.05, 2.25, 0.1, 0.1, 0.1, 0.01, 0.15, 0.01]),  "El": jnp.array([-70, -60, -65, -65, -67, -85, -70, -50]),
     "gna": jnp.array([3, 37, 120, 120, 100, 0, 0, 100]), "Ena": jnp.array([50, 55, 55, 55, 50, 50, 50, 60]),
@@ -103,7 +103,6 @@ params = {
     #thalamic synapses
     "gsynth": jnp.array([0.3]),
     "Esynth": jnp.array([0]),
-
 
     # stdp params
     "tau_pre": 12.0,
@@ -580,7 +579,7 @@ def gpe_rhs(t, y, args):
     # applied current 
     Iappctx9 = 5
     
-    # currents SNc (reduced from Chakravarthy, 2021)
+    # currents SNc (reduced from Nair, 2022)
     Il10 = gl[7]   * (V10 - El[7])
     Ina10 = gna[7] *  (M10_na**3) * H10_na * (V10 - Ena[7])
     Ikdr10 = gkdr * (M10_k**3) * (V10 - Ek[7])
@@ -1229,6 +1228,7 @@ results = compute_metrics_all_populations(
         "FSI S1": -20.0,
         "dStr": -20.0,
         "iStr": -20.0,
+        "SNc": -20.0,
     },
     refractory_ms=2.0,
 )
@@ -1265,7 +1265,7 @@ def plot_population_boxplots(results, population_order=None):
 
 plot_population_boxplots(
     results,
-    population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr"],
+    population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr", "SNc"],
 )
 #%%
 # 2. ISI CV
@@ -1284,6 +1284,7 @@ irregularity_results = compute_irregularity_all_populations(
         "FSI S1": -20.0,
         "dStr": -20.0,
         "iStr": -20.0,
+        "SNc": -20.0,
     },
     refractory_ms=2.0,
     min_spikes_for_cv=2,
@@ -1331,7 +1332,8 @@ def plot_irregularity_boxplots(
 
     colors = [
         "#6baed6", "#74c476", "#9ecae1", "#fdd835",
-        "#fdae6b", "#9edae5", "#c7e9c0", "#fcbba1"
+        "#6bfd88", "#9edae5", "#c7e9c0", "#fcbba1", 
+        "#e47e34", "#de2396", "#08bbcf"
     ]
     for patch, color in zip(bp["boxes"], colors):
         patch.set_facecolor(color)
@@ -1351,7 +1353,7 @@ def plot_irregularity_boxplots(
 
 plot_irregularity_boxplots(
     irregularity_results,
-    population_order=["GPe", "STN", "GPi", "TH", "PYR", "FSI", "dStr", "iStr"],
+    population_order=["GPe", "STN", "GPi", "TH", "PYR", "FSI", "PYR", "FSI", "dStr", "iStr", "SNc"],
     xlim=(0, 2.5),
 )
 
