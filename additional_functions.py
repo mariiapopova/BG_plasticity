@@ -188,11 +188,11 @@ def ca_drive(ica, FARADAY, depth):
     return jnp.maximum(drive, 0.0)
 
 # synapses
-# def Hinf(V, theta):
-#     return 1/(1+jnp.exp(-(V - theta)/2))
-
 def Hinf(V, theta):
-    return 1/(1+jnp.exp(-(V - theta + 57)/2))
+    return 1/(1+jnp.exp(-(V - theta)/2))
+
+# def Hinf(V, theta):
+#     return 1/(1+jnp.exp(-(V - theta + 57)/2))
 
 
 # creating a ring connectivity matrix
