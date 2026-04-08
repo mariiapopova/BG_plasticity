@@ -53,12 +53,12 @@ params = {
     "gm": 1,"Em": -100, # for striatum muscarinic current
 
     # synapse params (Rubin, 2004)
-    # in order of Igith, Igesn, Isnge, Igege, Igegi, Isngi
+    # in order of Igith, Igesn, Isnge, Igege, Igegi, Isngi, igestri, Igestrd
     "A": jnp.array([2.0 , 2.0 , 3.0, 2.0, 2.0, 3.0]),
     "B": jnp.array([0.04, 0.04, 0.1, 0.04, 0.04, 0.1]),
     "the": jnp.array([20, 20, 30, 20, 20, 30]),
-    "gsyn": jnp.array([0.08, 1, 0.3, 1, 1, 0.3]),
-    "Esyn": jnp.array([-85, -85, 0, -85, -85, 0]),
+    "gsyn": jnp.array([0.08, 1, 0.3, 1, 1, 0.3, 1, 1]),
+    "Esyn": jnp.array([-85, -85, 0, -85, -85, 0, -85, -85]),
     "tau": 5, "gpeak1": 0.3, "gpeak": 0.43, #parameters for second-order alpha synapse
 
     # synapse params (Karamavelu, 2004)
@@ -69,7 +69,7 @@ params = {
 
     # synapse params ctx (Santiniello, 2019)
     # in order of Ipyr, Ifsi
-    "gsynctx": jnp.array([0.3, 0.3, 1, 1, 0.07, 0.044, 0.3, 0.08, 0.3, 0.3, 0.3, 0.3]),
+    "gsynctx": jnp.array([0.3, 0.3, 1, 1, 0.07, 0.07, 0.3, 0.08, 0.3, 0.3, 0.3, 0.3]),
     "Esynctx": jnp.array([0, -80]),
 
     #thalamic synapses
@@ -91,6 +91,8 @@ params = {
     #"w_stn_gpi": jnp.eye(n_gpi, n_stn),
     "w_istr_gpe": jnp.eye(n_gpe, n_istr),
     "w_dstr_gpi": jnp.eye(n_gpi, n_dstr),
+    "w_gpe_istr": jnp.eye(n_istr, n_gpe),
+    "w_gpe_dstr": jnp.eye(n_dstr, n_gpe),
     # 2 : 1 connectivity for self-inhibtion
     # "w_stn_gpe": jnp.array([
     #     [1,1,0,0],
@@ -176,8 +178,8 @@ params_pd = {
     "A": jnp.array([2.0 , 2.0 , 3.0, 2.0, 2.0, 3.0]),
     "B": jnp.array([0.04, 0.04, 0.1, 0.04, 0.04, 0.1]),
     "the": jnp.array([20, 20, 30, 20, 20, 30]),
-    "gsyn": jnp.array([0.08, 1, 0.3, 1, 1, 0.3]),
-    "Esyn": jnp.array([-85, -85, 0, -85, -85, 0]),
+    "gsyn": jnp.array([0.08, 1, 0.3, 1, 1, 0.3, 1, 1]),
+    "Esyn": jnp.array([-85, -85, 0, -85, -85, 0, -85, -85]),
     "tau": 5, "gpeak1": 0.3, "gpeak": 0.43, #parameters for second-order alpha synapse
 
     # synapse params (Karamavelu, 2004)
@@ -209,6 +211,8 @@ params_pd = {
     #"w_gpe_gpi": jnp.eye(n_gpi, n_gpe),
     #"w_stn_gpi": jnp.eye(n_gpi, n_stn),
     "w_istr_gpe": jnp.eye(n_gpe, n_istr),
+    "w_gpe_istr": jnp.eye(n_istr, n_gpe),
+    "w_gpe_dstr": jnp.eye(n_dstr, n_gpe),
     "w_dstr_gpi": jnp.eye(n_gpi, n_dstr),
     # 2 : 1 connectivity for self-inhibtion
     # "w_stn_gpe": jnp.array([
@@ -421,6 +425,8 @@ def gpe_rhs(t, y, args):
     #w_stn_gpe = params["w_stn_gpe"] 
     w_gpi_th = params["w_gpi_th"]
     w_gpe_gpi = params["w_gpe_gpi"]
+    w_gpe_istr = params["w_gpe_istr"]
+    w_gpe_dstr = params["w_gpe_dstr"]
     #w_stn_gpi = params["w_stn_gpi"]
     #w_gpe_gpe = params["w_gpe_gpe"]
     w_istr = params["w_istr"]
@@ -548,7 +554,7 @@ def gpe_rhs(t, y, args):
     It1  = gt[0]  * (p1**2) * R1 * (V1 - Et)
 
     # as Istim from og script (change later to input from motor cortex)
-    Iapp_th = 0.5
+    Iapp_th = 0
 
     # ion currents stn
     Il2   = gl[1]   * (V2 - El[1])
@@ -570,7 +576,7 @@ def gpe_rhs(t, y, args):
     Iahp3 = gahp[2] * (V3 - Ek[2]) * (CA3 / (CA3 + k1[2]))
 
     # applied current gpe
-    Iappgpe = 7
+    Iappgpe = 7 + 5*pd
 
     # currents gpi
     Il4  = gl[3]  * (V4 - El[3])
@@ -581,20 +587,20 @@ def gpe_rhs(t, y, args):
     Iahp4 = gahp[3] * (V4 - Ek[3]) * (CA4 / (CA4 + k1[3]))
 
     # applied current gpi
-    Iappgpi = 16
+    Iappgpi = 15.5
 
     # currents str (direct and indirect)
     Ina5d = gna[4] * (m5d**3) * h5d * (V5d - Ena[4])
     Ik5d =  gk[4]  * (n5d**4) * (V5d - Ek[4])
     Il5d =  gl[4]  * (V5d - El[4]) 
     Im5d = (2.6 - 1.1 *pd) * gm * p5d * (V5d - Em)
-    Iappstrd = 0
+    Iappstrd = 1.4
 
     Ina5i = gna[4] * (m5i**3) * h5i * (V5i - Ena[4])
     Ik5i =  gk[4]  * (n5i**4) * (V5i - Ek[4])
     Il5i =  gl[4]  * (V5i - El[4]) 
     Im5i = (2.6 - 1.1 *pd) * gm * p5i * (V5i - Em)
-    Iappstri = 0
+    Iappstri = 1.4
 
     #currents cortex - like stn
     # CTX PYR
@@ -750,7 +756,7 @@ def gpe_rhs(t, y, args):
     Igesn = 0.5 *  (gsyn[1] * (V2 - Esyn[1]) * (w_gpe_stn @ S3))
     Isnge = 0.25 *  (gsyn[2] * (V3 - Esyn[2]) * ( W  @ S2))
     #Igege = 0.5 *  (gsyn[3] * (V3 - Esyn[3]) *  (w_gpe_gpe @ S3))
-    Igege = 0.25 *  ((pd*3+1)*(gsyn[3]) * (V3 - Esyn[3]) *  (W2 @ S3))
+    Igege = 0.25 *  ((3*pd+1)*(gsyn[3]) * (V3 - Esyn[3]) *  (W2 @ S3))
     Igegi = 0.5 *  (gsyn[4] * (V4 - Esyn[4]) *  (w_gpe_gpi @ S3))
     #Isngi = 0.5 *  (gsyn[5] * (V4 - Esyn[5]) *  (w_stn_gpi  @ S2))
     Isngi = 0.25 *  (gsyn[5] * (V4 - Esyn[5]) *  (W1  @ S2))
@@ -762,11 +768,11 @@ def gpe_rhs(t, y, args):
     Ipyfi = (1/n_ctx_pyr)*gsynctx[1] * (V7 - Esynctx[0]) * (w_pyr_fsi  @ S6) 
     Ififi = (1/n_ctx_fsi)*gsynctx[2] * (V7 - Esynctx[1]) * (w_fsi  @ S7) 
     Ifipy = (1/n_ctx_fsi)*gsynctx[3] * (V6 - Esynctx[1]) * (w_fsi_pyr  @ S7) 
-    Ipystrd = 0.2*(gsynctx[5] -0.044*pd) * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
-    Ipystri = 0.2*(gsynctx[4] -0.044*pd) * (V5i - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
+    Ipystrd = 0.2*(5*gsynctx[5] -0.3*pd) * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
+    Ipystri = 0.2*(5*gsynctx[4]) * (V5i - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
     Ipysn = 0.2*gsynctx[6] * (V2 - Esynctx[0]) * (w_pyr_stn  @ S6)  # check for valid parameters here 
-    Ipyth = 0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyr_th  @ S6)  # check for valid parameters here 
-    Ipys1th = 0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyrs1_th  @ S8)  # check for valid parameters here 
+    Ipyth = 0.5*0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyr_th  @ S6)  # check for valid parameters here 
+    Ipys1th = 0.5*0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyrs1_th  @ S8)  # check for valid parameters here 
     Ithpy = gsynth[0] * (V6 - Esynth[0]) * (w_th_pyr  @ S1)  # check for valid parameters here 
     Ithfi = gsynth[0] * (V7 - Esynth[0]) * (w_th_fsi  @ S1)  # check for valid parameters here 
     Ipypys1 = 0.2*gsynctx[0] * (V8 - Esynctx[0]) * (w_pyrs1  @ S8) # change to normalizing by number of presynaptic input neurons
@@ -777,6 +783,8 @@ def gpe_rhs(t, y, args):
     Im1fis1 = 0.2*gsynctx[9] * (V9 - Esynctx[0]) * (w_m1_s1fi  @ S6)
     Is1pym1 = 0.2*gsynctx[10] * (V6 - Esynctx[0]) * (w_s1_m1py  @ S8)
     Is1fim1 = 0.2*gsynctx[11] * (V7 - Esynctx[0]) * (w_s1_m1fi  @ S8)
+    Igestri = (gsyn[6] * (V5i - Esyn[6]) *  (w_gpe_istr @ S3))
+    Igestrd = (gsyn[7] * (V5d - Esyn[7]) *  (w_gpe_dstr @ S3))
 
 #%% dif equation updates gpe_rhs
     # differential equations th
@@ -807,13 +815,13 @@ def gpe_rhs(t, y, args):
     dCA4dt = 1e-4 * (-Ica4 - It4 - kca[2] * CA4)
 
     # differential equations str
-    dV5ddt = (-Il5d - Ik5d - Ina5d - Im5d - Istrd - Ipystrd +Iappstrd) / Cm
+    dV5ddt = (-Il5d - Ik5d - Ina5d - Im5d - Istrd - Ipystrd - Igestrd +Iappstrd) / Cm
     dm5ddt = str_alpham(V5d) * (1 - m5d) - str_betam(V5d) * m5d
     dh5ddt = str_alphah(V5d) * (1 - h5d) - str_betah(V5d) * h5d
     dn5ddt = str_alphan(V5d) * (1 - n5d) - str_betan(V5d) * n5d
     dp5ddt = str_alphap(V5d) * (1 - p5d) - str_betap(V5d) * p5d
 
-    dV5idt = (-Il5i - Ik5i - Ina5i - Im5i - Istri - Ipystri +Iappstri) / Cm
+    dV5idt = (-Il5i - Ik5i - Ina5i - Im5i - Istri - Ipystri - Igestri +Iappstri) / Cm
     dm5idt = str_alpham(V5i) * (1 - m5i) - str_betam(V5i) * m5i
     dh5idt = str_alphah(V5i) * (1 - h5i) - str_betah(V5i) * h5i
     dn5idt = str_alphan(V5i) * (1 - n5i) - str_betan(V5i) * n5i
@@ -1083,96 +1091,8 @@ def run_chunk_euler_scan(y0, params, t0, dt,chunk_length):
     return y_final, (ts, ys)
 
 
-# ✅ jit compile for speed
 run_chunk_euler_scan = jax.jit(run_chunk_euler_scan,static_argnames=('dt','chunk_length'))
 
-
-# def simulate_last_chunk_euler(y0, params, tmax, dt=0.1, dt_save=1,chunk_length = 1000):
-#     """
-#     Run full simulation in chunks with fixed-step Euler and return last chunk.
-#     """
-#     n_chunks = int(tmax // chunk_length)
-
-#     def step(carry, _):
-#         y, t0 = carry
-#         y_next, (ts, ys) = run_chunk_euler_scan(y, params, t0, dt=dt,chunk_length=chunk_length)
-#         return (y_next, t0 + chunk_length), (ts, ys)
-
-#     (y_final, _), (all_ts, all_ys) = jax.lax.scan(
-#         step,
-#         (y0, 0.0),
-#         xs=None,
-#         length=n_chunks,
-#     )
-
-#     # Extract only last chunk
-#     last_ts = all_ts[-1]
-#     last_ys = jax.tree.map(lambda x: x[-1], all_ys)
-
-#     return (
-#         last_ts,
-#         last_ys["V1_th"],
-#         last_ys["V2_stn"],
-#         last_ys["V3_gpe"],
-#         last_ys["V4_gpi"],
-#         last_ys["V5_dstr"],
-#         last_ys["V5_istr"],
-#         last_ys["V6_ctx"],
-#         last_ys["V7_ctx"],
-#         last_ys["V8_ctx"],
-#         last_ys["V9_ctx"],
-#         last_ys["W"],
-#         last_ys["W1"],
-#         last_ys["W2"],
-#     )
-
-# def simulate_last_chunk_euler(y0, params, tmax, dt=0.1, dt_save=1, chunk_length=1000):
-#     n_chunks = int(tmax // chunk_length)
-
-#     def step(carry, i):
-#         y, t0, last_ts, last_ys = carry
-
-#         y_next, (ts, ys) = run_chunk_euler_scan(y, params, t0, dt=dt, chunk_length=chunk_length)
-
-#         is_last = (i == n_chunks - 1)
-
-#         last_ts = jax.lax.select(is_last, ts, last_ts)
-#         last_ys = jax.tree.map(
-#             lambda new, old: jax.lax.select(is_last, new, old),
-#             ys,
-#             last_ys
-#         )
-
-#         return (y_next, t0 + chunk_length, last_ts, last_ys), None
-
-#     (y_final, t_final), _ = jax.lax.scan(
-#         step,
-#         (y0, 0.0),
-#         xs=None,
-#         length=n_chunks,
-#     )
-
-#     # now compute ONLY last chunk once
-#     _, (last_ts, last_ys) = run_chunk_euler_scan(
-#         y_final, params, t_final - chunk_length, dt=dt, chunk_length=chunk_length
-#     )
-
-#     return (
-#         last_ts,
-#         last_ys["V1_th"],
-#         last_ys["V2_stn"],
-#         last_ys["V3_gpe"],
-#         last_ys["V4_gpi"],
-#         last_ys["V5_dstr"],
-#         last_ys["V5_istr"],
-#         last_ys["V6_ctx"],
-#         last_ys["V7_ctx"],
-#         last_ys["V8_ctx"],
-#         last_ys["V9_ctx"],
-#         last_ys["W"],
-#         last_ys["W1"],
-#         last_ys["W2"],
-#     )
 
 def simulate_last_chunk_euler(
     y0, params, tmax, dt=0.1, dt_save=1, chunk_length=1000
@@ -1269,96 +1189,96 @@ population_voltages_pd = {
 }
 
 #%%
-# plot to check = healthy
-# plt.plot(ts, V1[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("TH")
-# plt.show()
+#plot to check = healthy
+plt.plot(ts, V1[:,3])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("TH")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V2[:,2])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("STN")
-# plt.show()
+# plot to check
+plt.plot(ts, V2[:,2])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("STN")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V3[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("GPe")
-# plt.show()
+# plot to check
+plt.plot(ts, V3[:,3])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("GPe")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V4[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("GPi")
-# plt.show()
+# plot to check
+plt.plot(ts, V4[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("GPi")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V5d[:,0])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("direct Striatum")
-# plt.show()
+# plot to check
+plt.plot(ts, V5d[:,0])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("direct Striatum")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V5i[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("indirect Striatum")
-# plt.show()
+# plot to check
+plt.plot(ts, V5i[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("indirect Striatum")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V6[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex M1 (PYR)")
-# plt.show()
+# plot to check
+plt.plot(ts, V6[:,3])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("Cortex M1 (PYR)")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V7[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex M1 (FSI)")
-# plt.show()
+# plot to check
+plt.plot(ts, V7[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("Cortex M1 (FSI)")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V8[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex S1 (PYR)")
-# plt.show()
+# plot to check
+plt.plot(ts, V8[:,3])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("Cortex S1 (PYR)")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, V9[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex S1 (FSI)")
-# plt.show()
+# plot to check
+plt.plot(ts, V9[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("Cortex S1 (FSI)")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, W[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, STN-GPe")
-# plt.show()
+# plot to check
+plt.plot(ts, W[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("W, STN-GPe")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, W1[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, STN-GPi")
-# plt.show()
+# plot to check
+plt.plot(ts, W1[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("W, STN-GPi")
+plt.show()
 
-# # plot to check
-# plt.plot(ts, W2[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, GPe-GPe")
-# plt.show()
+# plot to check
+plt.plot(ts, W2[:,1])
+plt.xlabel("t (ms)")
+plt.ylabel("V (mV)")
+plt.title("W, GPe-GPe")
+plt.show()
 
 #plot to check pd
 plt.plot(ts, V1_pd[:,3])
@@ -1452,9 +1372,12 @@ plt.title("W, GPe-GPe")
 plt.show()
 
 # %% model validation
+pop_quest = population_voltages
+volt_quest = V4 #gpi
+
 #1. mean Hz rate
 results = compute_metrics_all_populations(
-    population_voltages=population_voltages_pd,
+    population_voltages=pop_quest,
     dt_ms=dt0,
     spike_height_map={
         "GPe": 0.0,
@@ -1506,122 +1429,124 @@ plot_population_boxplots(
     population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr"],
 )
 # #%%
-# # 2. ISI CV
+# 2. ISI CV
 
-# irregularity_results = compute_irregularity_all_populations(
-#     population_voltages=population_voltages,
-#     dt_ms=1.0,
-#     spike_height_map={
-#         "GPe": -20.0,
-#         "GPi": -20.0,
-#         "TH": -20.0,
-#         "STN": -20.0,
-#         "PYR": 0.0,
-#         "FSI": -20.0,
-#         "dStr": -20.0,
-#         "iStr": -20.0,
-#     },
-#     refractory_ms=2.0,
-#     min_spikes_for_cv=2,
-# )
-
-
-# def plot_irregularity_boxplots(
-#     results,
-#     population_order=None,
-#     figsize=(8, 6),
-#     title="Irregularity by population (CV_ISI)",
-#     xlabel="CV of ISI",
-#     ylabel="Population",
-#     xlim=None,
-# ):
-#     if population_order is None:
-#         population_order = list(results.keys())
-
-#     labels = []
-#     data = []
-
-#     for pop in population_order:
-#         if pop not in results:
-#             continue
-#         vals = results[pop]["cv_isi"]
-#         vals = vals[np.isfinite(vals)]
-#         labels.append(pop)
-#         data.append(vals)
-
-#     fig, ax = plt.subplots(figsize=figsize)
-
-#     bp = ax.boxplot(
-#         data,
-#         vert=False,
-#         tick_labels=labels,
-#         patch_artist=True,
-#         showmeans=True,
-#         meanprops=dict(marker='*', markeredgecolor='black', markersize=7),
-#         medianprops=dict(color='black', linewidth=1.8),
-#         whiskerprops=dict(linewidth=1.6),
-#         capprops=dict(linewidth=1.6),
-#         boxprops=dict(linewidth=1.6),
-#         flierprops=dict(marker='+', markeredgecolor='black', markersize=6),
-#     )
-
-#     colors = [
-#         "#6baed6", "#74c476", "#9ecae1", "#fdd835",
-#         "#fdae6b", "#9edae5", "#c7e9c0", "#fcbba1"
-#     ]
-#     for patch, color in zip(bp["boxes"], colors):
-#         patch.set_facecolor(color)
-#         patch.set_alpha(0.95)
-
-#     ax.set_title(title)
-#     ax.set_xlabel(xlabel)
-#     ax.set_ylabel(ylabel)
-#     ax.grid(axis="x", alpha=0.3)
-
-#     if xlim is not None:
-#         ax.set_xlim(xlim)
-
-#     plt.tight_layout()
-#     plt.show()
+irregularity_results = compute_irregularity_all_populations(
+    population_voltages=pop_quest,
+    dt_ms=1.0,
+    spike_height_map={
+        "GPe": 0.0,
+        "GPi": 0.0,
+        "TH": -20.0,
+        "STN": 0.0,
+        "PYR M1": 0.0,
+        "FSI M1": 0.0,
+        "dStr": 0.0,
+        "iStr": 0.0,
+        "PYR S1": 0.0,
+        "FSI S1": 0.0,
+    },
+    refractory_ms=2.0,
+    min_spikes_for_cv=2,
+)
 
 
-# plot_irregularity_boxplots(
-#     irregularity_results,
-#     population_order=["GPe", "STN", "GPi", "TH", "PYR", "FSI", "dStr", "iStr"],
-#     xlim=(0, 2.5),
-# )
+def plot_irregularity_boxplots(
+    results,
+    population_order=None,
+    figsize=(8, 6),
+    title="Irregularity by population (CV_ISI)",
+    xlabel="CV of ISI",
+    ylabel="Population",
+    xlim=None,
+):
+    if population_order is None:
+        population_order = list(results.keys())
 
-# # %%
-# # 3. PSD GPi
-# # extract spike times from all neurons in nucleus
-# gpi_spike_times = extract_population_spike_times(V4, dt_ms=1.0, spike_height=0.0, refractory_ms=2.0)
+    labels = []
+    data = []
 
-# # calculate rate by computing average spikes per bin
-# t_rate, gpi_rate = population_rate_from_spike_times(
-#     gpi_spike_times,
-#     tmax_ms= tmax,
-#     bin_ms= 1.0,
-#     n_neurons=n_gpi
-# )
+    for pop in population_order:
+        if pop not in results:
+            continue
+        vals = results[pop]["cv_isi"]
+        vals = vals[np.isfinite(vals)]
+        labels.append(pop)
+        data.append(vals)
 
-# # smoothed rate
-# gpi_rate_smooth = smooth_rate(gpi_rate, sigma_ms=2.0, bin_ms=1.0)
+    fig, ax = plt.subplots(figsize=figsize)
 
-# # Welch PSD
-# freqs, psd = welch_psd(
-#     gpi_rate_smooth, #check whether rate smoothed or not is better
-#     dt_ms=1.0,
-#     nperseg=512,
-#     noverlap=256
-# )
-# # plotted
-# plt.figure(figsize=(6,4))
-# plt.plot(freqs, psd)
-# plt.xlim(0, 50)
-# plt.xlabel("Frequency (Hz)")
-# plt.ylabel("Power")
-# plt.title("GPi population-rate PSD (Welch)")
-# plt.show()
+    bp = ax.boxplot(
+        data,
+        vert=False,
+        tick_labels=labels,
+        patch_artist=True,
+        showmeans=True,
+        meanprops=dict(marker='*', markeredgecolor='black', markersize=7),
+        medianprops=dict(color='black', linewidth=1.8),
+        whiskerprops=dict(linewidth=1.6),
+        capprops=dict(linewidth=1.6),
+        boxprops=dict(linewidth=1.6),
+        flierprops=dict(marker='+', markeredgecolor='black', markersize=6),
+    )
+
+    colors = [
+        "#6baed6", "#74c476", "#9ecae1", "#fdd835",
+        "#fdae6b", "#9edae5", "#c7e9c0", "#fcbba1"
+    ]
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.95)
+
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="x", alpha=0.3)
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_irregularity_boxplots(
+    irregularity_results,
+    population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr"],
+    xlim=(0, 2.5),
+)
+
+# %%
+# 3. PSD GPi
+# extract spike times from all neurons in nucleus
+gpi_spike_times = extract_population_spike_times(volt_quest, dt_ms=1.0, spike_height=0.0, refractory_ms=2.0)
+
+# calculate rate by computing average spikes per bin
+t_rate, gpi_rate = population_rate_from_spike_times(
+    gpi_spike_times,
+    tmax_ms= tmax,
+    bin_ms= 1.0,
+    n_neurons=n_gpi
+)
+
+# smoothed rate
+gpi_rate_smooth = smooth_rate(gpi_rate, sigma_ms=2.0, bin_ms=1.0)
+
+# Welch PSD
+freqs, psd = welch_psd(
+    gpi_rate_smooth, #check whether rate smoothed or not is better
+    dt_ms=1.0,
+    nperseg=512,
+    noverlap=256
+)
+# plotted
+plt.figure(figsize=(6,4))
+plt.plot(freqs, psd)
+plt.xlim(0, 50)
+plt.xlabel("Frequency (Hz)")
+plt.ylabel("Power")
+plt.title("GPi population-rate PSD (Welch)")
+plt.show()
 
 # plt.figure(figsize=(8,3))
 # plt.plot(t_rate, gpi_rate, label="raw population rate")
