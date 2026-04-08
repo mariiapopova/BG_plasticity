@@ -3,7 +3,7 @@
 # choose device to do calculations on
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 #os.environ["JAX_LOG_COMPILES"] = "1"
 
 import numpy as np
@@ -234,10 +234,27 @@ def Hinf(V, theta):
 # def Hinf1(V):
 #     return 1/(1+jnp.exp(-(V + 57)/2))
 
+def stdp_derivatives(W, x_pre, x_post, H_pre, H_post):
+
+    tau_pre  = 12.0
+    tau_post = 27.5
+    A_plus  = 0.002
+    A_minus = 0.002 * 1.1
+
+    dx_pre  = -x_pre/tau_pre  + H_pre
+    dx_post = -x_post/tau_post + H_post
+
+    dW = (
+        A_plus  * jnp.outer(H_post, x_pre)
+        - A_minus * jnp.outer(x_post, H_pre)
+    )
+
+    return dW, dx_pre, dx_post
+
 # defining the functions for ODEterm
+@jax.jit
 def gpe_rhs(t, y, args):
     params = args
-
     # TH
     V1  = y["V1_th"]
     H1  = y["H1_th"]
@@ -429,6 +446,8 @@ def gpe_rhs(t, y, args):
     # dS41dt = A[4] * (1 - S4_1) * H_gpe  - B[4] * S4_1
     # dS42dt = A[5] * (1 - S4_2) * H_stn - B[5] * S4_2
 
+    #dw_gpe_stn, dx_pre, dx_post = stdp_derivatives(w_gpe_stn, x_pre, x_post, H_pre, H_post)
+    
     # synaptic currents using those gating variables
     Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4))
     Igesn = 0.5 * (gsyn[1] * (V2 - Esyn[1]) * (w_gpe_stn @ S3))
@@ -533,70 +552,7 @@ y0 = {
     "S4_gpi":  jnp.zeros((n_gpi,),),
     "Z4_gpi":  jnp.zeros((n_gpi,),),
 }
-#%% chunked diffrax solver version
-# @jax.jit
-# def run_chunk(y0, params, t0, t1, dt0, dt_save ):
-#     #ts = jnp.arange(t0, t1 + 1e-9, dt_save)
 
-#     term = diffrax.ODETerm(gpe_rhs)
-#     solver = diffrax.Tsit5()
-
-#     n_steps = jnp.array(jnp.ceil((t1 - t0) / dt_save),int)
-#     ts = t0 + dt_save * jnp.arange(n_steps)
-
-#     sol = diffrax.diffeqsolve(
-#         term,
-#         solver,
-#         t0=t0,
-#         t1=t1,
-#         dt0=dt0,                        # internal dt = dt used by step solver                    
-#         max_steps=1000000,
-#         y0=y0,
-#         args=params,
-#         saveat=diffrax.SaveAt(ts=ts),  # external dt = saved values
-#         stepsize_controller=diffrax.PIDController(rtol=1e-5, atol=1e-7)
-#     )
-
-#     # saving last state of chunk 
-#     yT = jax.tree.map(lambda a: a[-1], sol.ys)  
-#     return sol.ys, yT
-
-
-# #run_chunk_jit = jax.jit(run_chunk, static_argnames=("dt0", "dt_save"))
-
-
-# def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1.0):
-
-#     # starting variables
-#     t0 = 0.0
-#     y = y0
-
-#     # what we want to save, e.g. only V2 (of stn)
-#     # saved at ts (time scale with dt_save)
-#     all_ts = []
-#     all_V1 = []
-#     all_V2 = []
-#     all_V3 = []
-#     all_V4 = []
-
-#     # looping across chunks 
-#     # using jit compilation inside each chunk (run_chunk)
-#     while t0 < tmax:
-#         t1 = jnp.minimum(t0 + chunk_size, tmax)
-#         ys, y = run_chunk(y, params, t0, t1, dt0, dt_save)
-
-#         # Diffrax SaveAt(dt=dt_save) returns an array of times:
-#         ts_chunk = jnp.linspace(t0, t1, len(list(ys.values())[0]))
-#         all_ts.append(ts_chunk)
-
-#         #all_ts.append(ts)
-#         all_V1.append(ys["V1_th"])
-#         all_V2.append(ys["V2_stn"])   # shape (len(ts), n_th)
-#         all_V3.append(ys["V3_gpe"])
-#         all_V4.append(ys["V4_gpi"])
-#         t0 = float(t1)
-
-#     return jnp.concatenate(all_ts), jnp.concatenate(all_V1), jnp.concatenate(all_V2), jnp.concatenate(all_V3), jnp.concatenate(all_V4)
 #%%
 @jax.jit
 def run_chunk(y0, params, t0, t1, dt0, ts):
@@ -617,66 +573,240 @@ def run_chunk(y0, params, t0, t1, dt0, ts):
         args=params,
         saveat=diffrax.SaveAt(ts=ts),
         max_steps=1_000_000,
-        stepsize_controller=diffrax.PIDController(rtol=1e-5, atol=1e-7)
+        stepsize_controller=diffrax.PIDController(rtol=1e-4, atol=1e-6, dtmin = 0.001, force_dtmin=True)
     )
-
+    
     # last state of chunk
     yT = jax.tree.map(lambda a: a[-1], sol.ys)
     return sol.ys, yT
 
-
-def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1):
+def simulate_chunked(
+    y0, params, tmax, chunk_size, dt0=0.1, dt_save=1
+):
     """
-    Simulate in chunks, generating a concrete ts for each chunk
-    to avoid arange tracer issues.
+    Simulate ODE in chunks using Diffrax, keeping only the last chunk.
+    Fully JAX-compatible (jit + scan safe).
     """
-    t0 = 0.0
-    y = y0
 
-    all_ts = []
-    all_V1 = []
-    all_V2 = []
-    all_V3 = []
-    all_V4 = []
+    # --- static values ---
+    n_chunks = int(tmax // chunk_size)
+    n_steps = int(chunk_size // dt_save)
 
-    while t0 < tmax:
-        t1 = min(t0 + chunk_size, tmax)
+    # --- template ts for shape inference ---
+    ts_template = dt_save * jnp.arange(n_steps)
 
-        # ---- Compute concrete ts BEFORE calling run_chunk ----
-        n_steps = int(jnp.ceil((t1 - t0)/dt_save))
-        ts = t0 + dt_save * jnp.arange(n_steps)  # <--- concrete stop, no tracers
+    # --- get shapes (no real compute) ---
+    ys_shape, yT_shape = jax.eval_shape(
+        lambda y: run_chunk(y, params, 0.0, chunk_size, dt0, ts_template),
+        y0,
+    )
 
-        # run chunk (JIT)
-        ys, y = run_chunk(y, params, t0, t1, dt0, ts)
+    # --- initialize carry ---
+    init_ts = jnp.zeros((n_steps,))
+    init_ys = jax.tree.map(lambda x: jnp.zeros(x.shape, x.dtype), ys_shape)
 
-        # collect
-        all_ts.append(ts)
-        all_V1.append(ys["V1_th"])
-        all_V2.append(ys["V2_stn"])
-        all_V3.append(ys["V3_gpe"])
-        all_V4.append(ys["V4_gpi"])
+    def step(carry, i):
+        y, t0, last_ts, last_ys = carry
 
-        # next chunk
-        t0 = float(t1)  # make sure t0 is python float
+        # fixed chunk end (no Python min!)
+        t1 = t0 + chunk_size
 
-    # concatenate all chunks
-    all_ts = jnp.concatenate(all_ts)
-    all_V1 = jnp.concatenate(all_V1)
-    all_V2 = jnp.concatenate(all_V2)
-    all_V3 = jnp.concatenate(all_V3)
-    all_V4 = jnp.concatenate(all_V4)
+        # fixed ts (same shape every iteration)
+        ts = t0 + dt_save * jnp.arange(n_steps)
 
-    return all_ts, all_V1, all_V2, all_V3, all_V4
+        # run solver
+        ys, y_next = run_chunk(y, params, t0, t1, dt0, ts)
+
+        # detect last iteration
+        is_last = (i == n_chunks - 1)
+
+        # update only on last chunk
+        last_ts = jax.lax.select(is_last, ts, last_ts)
+        last_ys = jax.tree.map(
+            lambda new, old: jax.lax.select(is_last, new, old),
+            ys,
+            last_ys,
+        )
+
+        return (y_next, t1, last_ts, last_ys), None
+
+    # --- run scan ---
+    (y_final, t_final, last_ts, last_ys), _ = jax.lax.scan(
+        step,
+        (y0, 0.0, init_ts, init_ys),
+        xs=jnp.arange(n_chunks),
+    )
+
+    # --- return last chunk ---
+    return (
+        last_ts,
+        last_ys["V1_th"],
+        last_ys["V2_stn"],
+        last_ys["V3_gpe"],
+        last_ys["V4_gpi"],
+    )
+
+# def simulate_chunked(y0, params, tmax, chunk_size, dt0=0.1, dt_save=1):
+#     """
+#     Simulate in chunks, generating a concrete ts for each chunk
+#     to avoid arange tracer issues.
+#     """
+#     t0 = 0.0
+#     y = y0
+
+#     all_ts = []
+#     all_V1 = []
+#     all_V2 = []
+#     all_V3 = []
+#     all_V4 = []
+
+#     while t0 < tmax:
+#         t1 = min(t0 + chunk_size, tmax)
+
+#         # ---- Compute concrete ts BEFORE calling run_chunk ----
+#         n_steps = int(jnp.ceil((t1 - t0)/dt_save))
+#         ts = t0 + dt_save * jnp.arange(n_steps)  # <--- concrete stop, no tracers
+
+#         # run chunk (JIT)
+#         ys, y = run_chunk(y, params, t0, t1, dt0, ts)
+
+#         # collect
+#         all_ts.append(ts)
+#         all_V1.append(ys["V1_th"])
+#         all_V2.append(ys["V2_stn"])
+#         all_V3.append(ys["V3_gpe"])
+#         all_V4.append(ys["V4_gpi"])
+
+#         # next chunk
+#         t0 = float(t1)  # make sure t0 is python float
+
+#     # concatenate all chunks
+#     all_ts = jnp.concatenate(all_ts)
+#     all_V1 = jnp.concatenate(all_V1)
+#     all_V2 = jnp.concatenate(all_V2)
+#     all_V3 = jnp.concatenate(all_V3)
+#     all_V4 = jnp.concatenate(all_V4)
+
+#     return all_ts, all_V1, all_V2, all_V3, all_V4
+
+#%% PERFECT EULER
+# def run_chunk_euler_scan(y0, params, t0, dt,chunk_length):
+#     n_steps =chunk_length//dt
+#     ts = t0 + dt * jnp.arange(n_steps)
+#     print("Compile chunk")
+
+#     def euler_step(y, t):
+#         dy = gpe_rhs(t, y, params)
+#         y_next = jax.tree.map(lambda y, dy: y + dt * dy, y, dy)
+#         return y_next, y_next
+
+#     y_final, ys = jax.lax.scan(euler_step, y0, ts)
+#     return y_final, (ts, ys)
+
+
+# # ✅ jit compile for speed
+# run_chunk_euler_scan = jax.jit(run_chunk_euler_scan,static_argnames=('dt','chunk_length'))
+
+#DIFFRAX Euler-worse than mine
+# def run_chunk_euler_diffrax_fixed(y0, params, t0, dt, chunk_size, dt_save):
+#     term = diffrax.ODETerm(gpe_rhs)
+#     solver = diffrax.Euler()
+
+#     # number of saved points as static integer
+#     n_save = int(chunk_size // dt_save)
+#     ts = t0 + dt_save * jnp.arange(n_save)  # traced t0 is fine here
+
+#     saveat = diffrax.SaveAt(ts=ts)
+
+#     sol = diffrax.diffeqsolve(
+#         term,
+#         solver,
+#         t0=t0,
+#         t1=t0 + chunk_size,
+#         dt0=dt,
+#         y0=y0,
+#         args=params,
+#         saveat=saveat,
+#         max_steps=int(1e8),
+#     )
+
+#     print(sol.stats)   # total solver steps
+
+#     yT = jax.tree.map(lambda a: a[-1], sol.ys)
+#     return yT, (ts, sol.ys)
+
+# run_chunk_euler_diffrax = jax.jit(run_chunk_euler_diffrax_fixed, static_argnames=("dt_save", "chunk_size"))
+
+# def simulate_last_chunk_euler(
+#     y0, params, tmax, dt=0.1, dt_save=1, chunk_length=1000
+# ):
+#     n_chunks = int(tmax // chunk_length)
+
+#     # --- get shapes for initialization (no real compute) ---
+#     _, (ts_shape, ys_shape) = jax.eval_shape(
+#         lambda y: run_chunk_euler_diffrax_fixed(y, params, 0.0, dt, chunk_length, dt_save),
+#         y0,
+#     )
+
+#     init_ts = jax.tree.map(lambda x: jnp.zeros(x.shape, x.dtype), ts_shape)
+#     init_ys = jax.tree.map(lambda x: jnp.zeros(x.shape, x.dtype), ys_shape)
+
+#     def step(carry, i):
+#         y, t0, last_ts, last_ys = carry
+
+#         y_next, (ts, ys) = run_chunk_euler_diffrax_fixed(
+#             y, params, t0, dt=dt, chunk_size=chunk_length, dt_save=dt_save
+#         )
+
+#         # detect last iteration
+#         is_last = (i == n_chunks - 1)
+
+#         # update only on last step
+#         last_ts = jax.lax.select(is_last, ts, last_ts)
+#         last_ys = jax.tree.map(
+#             lambda new, old: jax.lax.select(is_last, new, old),
+#             ys,
+#             last_ys,
+#         )
+
+#         return (y_next, t0 + chunk_length, last_ts, last_ys), None
+
+#     (y_final, t_final, last_ts, last_ys), _ = jax.lax.scan(
+#         step,
+#         (y0, 0.0, init_ts, init_ys),
+#         xs=jnp.arange(n_chunks),
+#     )
+
+#     return (
+#         last_ts,
+#         last_ys["V1_th"],
+#         last_ys["V2_stn"],
+#         last_ys["V3_gpe"],
+#         last_ys["V4_gpi"],
+#     )
 #%% run simulation
-tmax = 1000.0
+# tmax = 1000.0
+# chunk_size = 1000.0      # 1 second per chunk
+# dt0 = 0.01
+# dt_save = 1           # save every 1 ms
+
+# ts, V1, V2, V3, V4 = simulate_last_chunk_euler(y0, params, tmax, dt0, dt_save, chunk_size)
+# ts_pd, V1_pd, V2_pd, V3_pd, V4_pd = simulate_last_chunk_euler(y0, params_pd, tmax, dt0,dt_save,chunk_size)
+
+# ts, V1, V2, V3, V4 = simulate_last_chunk_euler(y0, params, tmax, dt0, dt_save, chunk_size)
+# ts_pd, V1_pd, V2_pd, V3_pd, V4_pd = simulate_last_chunk_euler(y0, params_pd, tmax, dt0, dt_save, chunk_size)
+
+# ts, V1, V2, V3, V4 = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
+# ts_pd, V1_pd, V2_pd, V3_pd, V4_pd = simulate_chunked(y0, params_pd, tmax, chunk_size, dt0, dt_save)
+
+#%%
+tmax = 100.0
 chunk_size = 100.0      # 1 second per chunk
-dt0 = 0.1
+dt0 = 0.01
 dt_save = 1           # save every 1 ms
 
 ts, V1, V2, V3, V4 = simulate_chunked(y0, params, tmax, chunk_size, dt0, dt_save)
 ts_pd, V1_pd, V2_pd, V3_pd, V4_pd = simulate_chunked(y0, params_pd, tmax, chunk_size, dt0, dt_save)
-
-#%%
 # plot to check
 plt.plot(ts, V1[:,0])
 plt.xlabel("t (ms)")
@@ -720,53 +850,53 @@ print("GPi FR:", findfreq(V4[:,1]))
 
 #%% fourier transform
 
-sig2 = V2[:,0]
-fft_res2 = np.abs(np.fft.rfft(np.fft.ifftshift(sig2-np.mean(sig2))))
-ff_freqs2 = np.fft.rfftfreq(n= 10000,d = 1e-4)
+# sig2 = V2[:,0]
+# fft_res2 = np.abs(np.fft.rfft(np.fft.ifftshift(sig2-np.mean(sig2))))
+# ff_freqs2 = np.fft.rfftfreq(n= 10000,d = 1e-4)
 
-sig2_pd = V2_pd[:,0]
-fft_res2_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig2_pd-np.mean(sig2_pd))))
-ff_freqs2_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
+# sig2_pd = V2_pd[:,0]
+# fft_res2_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig2_pd-np.mean(sig2_pd))))
+# ff_freqs2_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
 
-sig3 = V3[:,0]
-fft_res3 = np.abs(np.fft.rfft(np.fft.ifftshift(sig3-np.mean(sig3))))
-ff_freqs3 = np.fft.rfftfreq(n= 10000,d = 1e-4)
+# sig3 = V3[:,0]
+# fft_res3 = np.abs(np.fft.rfft(np.fft.ifftshift(sig3-np.mean(sig3))))
+# ff_freqs3 = np.fft.rfftfreq(n= 10000,d = 1e-4)
 
-sig3_pd = V3_pd[:,0]
-fft_res3_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig3_pd-np.mean(sig3_pd))))
-ff_freqs3_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
+# sig3_pd = V3_pd[:,0]
+# fft_res3_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig3_pd-np.mean(sig3_pd))))
+# ff_freqs3_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
 
-sig4 = V4[:,0]
-fft_res4 = np.abs(np.fft.rfft(np.fft.ifftshift(sig4-np.mean(sig4))))
-ff_freqs4 = np.fft.rfftfreq(n= 10000,d = 1e-4)
+# sig4 = V4[:,0]
+# fft_res4 = np.abs(np.fft.rfft(np.fft.ifftshift(sig4-np.mean(sig4))))
+# ff_freqs4 = np.fft.rfftfreq(n= 10000,d = 1e-4)
 
-sig4_pd = V4_pd[:,0]
-fft_res4_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig4_pd-np.mean(sig4_pd))))
-ff_freqs4_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
+# sig4_pd = V4_pd[:,0]
+# fft_res4_pd = np.abs(np.fft.rfft(np.fft.ifftshift(sig4_pd-np.mean(sig4_pd))))
+# ff_freqs4_pd = np.fft.rfftfreq(n= 10000,d = 1e-4)
 
-plt.figure(figsize=(15,8))
-plt.plot(ff_freqs2[:50],fft_res2[:50],label='Healthy')
-plt.plot(ff_freqs2_pd[:50],fft_res2_pd[:50],label='PD')
-plt.ylabel('Amplitude [a.u.]')
-plt.xlabel('Frequency [Hz]')
-plt.legend()
-plt.title('Mean STN psd')
-plt.show()
+# plt.figure(figsize=(15,8))
+# plt.plot(ff_freqs2[:50],fft_res2[:50],label='Healthy')
+# plt.plot(ff_freqs2_pd[:50],fft_res2_pd[:50],label='PD')
+# plt.ylabel('Amplitude [a.u.]')
+# plt.xlabel('Frequency [Hz]')
+# plt.legend()
+# plt.title('Mean STN psd')
+# plt.show()
 
-plt.figure(figsize=(15,8))
-plt.plot(ff_freqs3[:50],fft_res3[:50],label='Healthy')
-plt.plot(ff_freqs3_pd[:50],fft_res3_pd[:50],label='PD')
-plt.ylabel('Amplitude [a.u.]')
-plt.xlabel('Frequency [Hz]')
-plt.legend()
-plt.title('Mean GPe psd')
-plt.show()
+# plt.figure(figsize=(15,8))
+# plt.plot(ff_freqs3[:50],fft_res3[:50],label='Healthy')
+# plt.plot(ff_freqs3_pd[:50],fft_res3_pd[:50],label='PD')
+# plt.ylabel('Amplitude [a.u.]')
+# plt.xlabel('Frequency [Hz]')
+# plt.legend()
+# plt.title('Mean GPe psd')
+# plt.show()
 
-plt.figure(figsize=(15,8))
-plt.plot(ff_freqs4[:50],fft_res4[:50],label='Healthy')
-plt.plot(ff_freqs4_pd[:50],fft_res4_pd[:50],label='PD')
-plt.ylabel('Amplitude [a.u.]')
-plt.xlabel('Frequency [Hz]')
-plt.legend()
-plt.title('Mean GPi psd')
-plt.show()
+# plt.figure(figsize=(15,8))
+# plt.plot(ff_freqs4[:50],fft_res4[:50],label='Healthy')
+# plt.plot(ff_freqs4_pd[:50],fft_res4_pd[:50],label='PD')
+# plt.ylabel('Amplitude [a.u.]')
+# plt.xlabel('Frequency [Hz]')
+# plt.legend()
+# plt.title('Mean GPi psd')
+# plt.show()
