@@ -593,14 +593,14 @@ def gpe_rhs(t, y, args):
     Ina5d = gna[4] * (m5d**3) * h5d * (V5d - Ena[4])
     Ik5d =  gk[4]  * (n5d**4) * (V5d - Ek[4])
     Il5d =  gl[4]  * (V5d - El[4]) 
-    Im5d = (2.6 - 1.1 *pd) * gm * p5d * (V5d - Em)
-    Iappstrd = 1.4
+    Im5d = (2.6 - 0.5 *pd) * gm * p5d * (V5d - Em)
+    Iappstrd = 0.4
 
     Ina5i = gna[4] * (m5i**3) * h5i * (V5i - Ena[4])
     Ik5i =  gk[4]  * (n5i**4) * (V5i - Ek[4])
     Il5i =  gl[4]  * (V5i - El[4]) 
-    Im5i = (2.6 - 1.1 *pd) * gm * p5i * (V5i - Em)
-    Iappstri = 1.4
+    Im5i = (2.6 - 0.5 *pd) * gm * p5i * (V5i - Em)
+    Iappstri = 0.6
 
     #currents cortex - like stn
     # CTX PYR
@@ -768,7 +768,7 @@ def gpe_rhs(t, y, args):
     Ipyfi = (1/n_ctx_pyr)*gsynctx[1] * (V7 - Esynctx[0]) * (w_pyr_fsi  @ S6) 
     Ififi = (1/n_ctx_fsi)*gsynctx[2] * (V7 - Esynctx[1]) * (w_fsi  @ S7) 
     Ifipy = (1/n_ctx_fsi)*gsynctx[3] * (V6 - Esynctx[1]) * (w_fsi_pyr  @ S7) 
-    Ipystrd = 0.2*(5*gsynctx[5] -0.3*pd) * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
+    Ipystrd = 0.2*(5*gsynctx[5] -0.25*pd) * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
     Ipystri = 0.2*(5*gsynctx[4]) * (V5i - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
     Ipysn = 0.2*gsynctx[6] * (V2 - Esynctx[0]) * (w_pyr_stn  @ S6)  # check for valid parameters here 
     Ipyth = 0.5*0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyr_th  @ S6)  # check for valid parameters here 
@@ -1231,54 +1231,54 @@ plt.ylabel("V (mV)")
 plt.title("indirect Striatum")
 plt.show()
 
-# plot to check
-plt.plot(ts, V6[:,3])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex M1 (PYR)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V6[:,3])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex M1 (PYR)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, V7[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex M1 (FSI)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V7[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex M1 (FSI)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, V8[:,3])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex S1 (PYR)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V8[:,3])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex S1 (PYR)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, V9[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex S1 (FSI)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V9[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex S1 (FSI)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, W[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("W, STN-GPe")
-plt.show()
+# # plot to check
+# plt.plot(ts, W[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("W, STN-GPe")
+# plt.show()
 
-# plot to check
-plt.plot(ts, W1[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("W, STN-GPi")
-plt.show()
+# # plot to check
+# plt.plot(ts, W1[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("W, STN-GPi")
+# plt.show()
 
-# plot to check
-plt.plot(ts, W2[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("W, GPe-GPe")
-plt.show()
+# # plot to check
+# plt.plot(ts, W2[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("W, GPe-GPe")
+# plt.show()
 
 #plot to check pd
 plt.plot(ts, V1_pd[:,3])
@@ -1322,54 +1322,54 @@ plt.ylabel("V (mV)")
 plt.title("indirect Striatum")
 plt.show()
 
-# plot to check
-plt.plot(ts, V6_pd[:,3])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex M1 (PYR)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V6_pd[:,3])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex M1 (PYR)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, V7_pd[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex M1 (FSI)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V7_pd[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex M1 (FSI)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, V8_pd[:,3])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex S1 (PYR)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V8_pd[:,3])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex S1 (PYR)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, V9_pd[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("Cortex S1 (FSI)")
-plt.show()
+# # plot to check
+# plt.plot(ts, V9_pd[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("Cortex S1 (FSI)")
+# plt.show()
 
-# plot to check
-plt.plot(ts, W_pd[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("W, STN-GPe")
-plt.show()
+# # plot to check
+# plt.plot(ts, W_pd[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("W, STN-GPe")
+# plt.show()
 
-# plot to check
-plt.plot(ts, W1_pd[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("W, STN-GPi")
-plt.show()
+# # plot to check
+# plt.plot(ts, W1_pd[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("W, STN-GPi")
+# plt.show()
 
-# plot to check
-plt.plot(ts, W2_pd[:,1])
-plt.xlabel("t (ms)")
-plt.ylabel("V (mV)")
-plt.title("W, GPe-GPe")
-plt.show()
+# # plot to check
+# plt.plot(ts, W2_pd[:,1])
+# plt.xlabel("t (ms)")
+# plt.ylabel("V (mV)")
+# plt.title("W, GPe-GPe")
+# plt.show()
 
 # %% model validation
 pop_quest = population_voltages
@@ -1380,16 +1380,16 @@ results = compute_metrics_all_populations(
     population_voltages=pop_quest,
     dt_ms=dt0,
     spike_height_map={
-        "GPe": 0.0,
-        "GPi": 0.0,
+        "GPe": -20.0,
+        "GPi": -20.0,
         "TH": -20.0,
-        "STN": 0.0,
-        "PYR M1": 0.0,
-        "FSI M1": 0.0,
-        "dStr": 0.0,
-        "iStr": 0.0,
+        "STN": -20.0,
+        "PYR": 0.0,
+        "FSI": -20.0,
+        "dStr": -20.0,
+        "iStr": -20.0,
         "PYR S1": 0.0,
-        "FSI S1": 0.0,
+        "FSI S1": -20.0,
     },
     refractory_ms=2.0,
 )
