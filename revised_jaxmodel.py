@@ -14,7 +14,7 @@ import diffrax
 import matplotlib.pyplot as plt
 from additional_functions import *
 from checkfreq import *
-from createdbs_jax import *
+#from createdbs_jax import *
 import matplotlib.mlab as mlab
 
 #jax.config.update("jax_enable_x64", True)
@@ -48,6 +48,8 @@ def dbs_current(t, cond):
     dt = cond["dt"]
     Idbs = cond["Idbs"]
 
+    Idbs = jnp.atleast_1d(Idbs)
+
     idx = jnp.clip(
         jnp.floor(t / dt).astype(jnp.int32),
         0,
@@ -65,7 +67,7 @@ def make_condition_config(pd, stim, freq, tmax, dt):
     stim_ts = jnp.arange(n_steps) * dt
 
     if stim == 0:
-        Idbs = jnp.zeros_like(n_steps)
+        Idbs = jnp.zeros((n_steps,), dtype=jnp.float32)
     else:
        Idbs = createdbs_jax(freq, tmax, dt)
 
@@ -93,7 +95,6 @@ def make_params(cfg, key0=None, n=4):
     stim = cfg["stim"]
     DA = cfg["DA"]
     freq = cfg["freq"]
-    sw = cfg["sw"]
     tmax = cfg["tmax"]
     dt = cfg["dt"]
     stim_ts = cfg["stim_ts"]
@@ -125,7 +126,6 @@ def make_params(cfg, key0=None, n=4):
             "stim": stim,
             "DA": DA,
             "freq": freq,
-            "sw": sw,
             "tmax": tmax,
             "dt": dt,
             "stim_ts": stim_ts,
