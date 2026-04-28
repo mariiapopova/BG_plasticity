@@ -282,6 +282,23 @@ def init_connectivity_divergence(key,n_post,n_pre,wsyn,
     W = W.at[chosen_post, pre_idx].set(wsyn)
     return W
 
+def w_matrix_divergent(key, n, p, k):
+    W = jnp.zeros((p, n), dtype=jnp.float32)
+
+    def connect_one_source(i, key):
+        idx = jax.random.choice(key, p, shape=(k,), replace=False)
+        return W.at[idx, i].set(1.0)
+
+    keys = jax.random.split(key, n)
+
+    W = jax.vmap(connect_one_source)(jnp.arange(n), keys)
+
+    # vmap gives (n, p, n) → we need to combine updates
+    W = jnp.sum(W, axis=0)
+
+    return W
+
+
 
 
 
