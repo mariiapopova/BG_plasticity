@@ -14,49 +14,11 @@ import diffrax
 import matplotlib.pyplot as plt
 from additional_functions import *
 from checkfreq import *
-#from createdbs_jax import *
+from createdbs_jax import *
 import matplotlib.mlab as mlab
 
 #jax.config.update("jax_enable_x64", True)
 print(jax.devices())
-
-# dbs train creating function + look up function (temporary in this script)
-def createdbs_jax(freq, tmax, dt, pulse_width=0.3, amplitude=300.0):
-
-    n_steps = int(round(tmax / dt)) + 1 # do we need +1?
-    t_idx = jnp.arange(n_steps)
-
-    if freq <= 0.0:
-        return jnp.zeros(n_steps)
-
-    isi = 1000.0 / freq
-
-    # discretization
-    isi_steps = int(round(isi / dt))
-    pw_steps = int(round(pulse_width / dt))
-
-    # pulse condition
-    waveform = jnp.where(
-        (t_idx % isi_steps) < pw_steps,
-        amplitude,
-        0.0
-    )
-
-    return waveform
-
-def dbs_current(t, cond):
-    dt = cond["dt"]
-    Idbs = cond["Idbs"]
-
-    Idbs = jnp.atleast_1d(Idbs)
-
-    idx = jnp.clip(
-        jnp.floor(t / dt).astype(jnp.int32),
-        0,
-        Idbs.shape[0] - 1
-    )
-
-    return Idbs[idx]
 
 
 # cfg function

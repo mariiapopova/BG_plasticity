@@ -224,3 +224,20 @@ def welch_psd(signal, dt_ms, nperseg=64, noverlap=32): # npersig: raise later fo
     freqs, psd = sig.welch(x, fs=fs, nperseg=nperseg, noverlap=noverlap)
     return freqs, psd
 
+
+
+def build_population_voltages(res):
+    return {
+        "TH": res["V1_th"],
+        "STN": res["V2_stn"],
+        "GPe": res["V3_gpe"],
+        "GPi": res["V4_gpi"],
+        "dStr": res["V5_dstr"],
+        "iStr": res["V5_istr"],
+        "PYR M1": res["V6_ctx"],
+        "FSI M1": res["V7_ctx"],
+        "PYR S1": res["V8_ctx"],
+        "FSI S1": res["V9_ctx"],
+        "SNc": res["V10_snc"],
+    }
+
