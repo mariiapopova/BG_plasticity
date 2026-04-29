@@ -310,3 +310,27 @@ def cD1(DA, AD1=10.0, lambda_str=7.5):
 def spike_event(V, threshold):
     return (V > threshold).astype(V.dtype)
 
+
+# dbs configuration 
+# shift and mask function for dbs patch stimulation
+def shift_psc(PSC, shift_ms, dt):
+    shift_steps = int(shift_ms / dt)
+    return jnp.concatenate([
+        jnp.zeros(shift_steps),
+        PSC[:-shift_steps]
+    ])
+
+def make_mask(n, indices):
+    mask = jnp.zeros(n)
+    mask = mask.at[jnp.array(indices)].set(1.0)
+    return mask
+
+def make_stn_patches():
+    return [
+        jnp.array([0,1,4,5]),
+        jnp.array([2,3,6,7]),
+        jnp.array([8,9,12,13]),
+        jnp.array([10,11,14,15]),
+    ]
+
+

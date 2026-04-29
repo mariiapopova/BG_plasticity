@@ -15,23 +15,55 @@ import matplotlib.pyplot as plt
 from additional_functions import *
 from checkfreq import *
 from createdbs_jax import *
+from dbssyn import *
 import matplotlib.mlab as mlab
 
 #jax.config.update("jax_enable_x64", True)
 print(jax.devices())
 
-
 # cfg function
-def make_condition_config(pd, stim, freq, tmax, dt):
-    DA = 1.0 if pd == 0 else 0.1
+def make_condition_config(pd, stim, freq, tmax, dt, sw):
 
-    n_steps = int(round(tmax / dt))
+    DA = 1.0 if pd == 0 else 0.1
+    
+    n_steps = int(round(tmax / dt)) + 1
     stim_ts = jnp.arange(n_steps) * dt
 
     if stim == 0:
-        Idbs = jnp.zeros((n_steps,), dtype=jnp.float32)
+        PSC_all = jnp.zeros((4, n_steps))
+        masks = jnp.ones((4, 16)) / 4.0
+
     else:
-       Idbs = createdbs_jax(freq, tmax, dt)
+        PSC_base = jnp.asarray(
+            dbssyn(freq, tmax, dt, sw),
+            dtype=jnp.float32
+        )
+
+        #  spatial modes 
+        # sw = 0 or 1 : global stimulation
+        if sw in [0, 1]:
+            PSC_all = jnp.stack([PSC_base] * 4)
+            masks = jnp.ones((4, 16)) / 4.0
+
+        # sw = 2 : patches + temporal shifts
+        elif sw == 2:
+            PSC_ch1 = PSC_base
+            PSC_ch2 = shift_psc(PSC_base, 2.0, dt) #shift in ms
+            PSC_ch3 = shift_psc(PSC_base, 4.0, dt)
+            PSC_ch4 = shift_psc(PSC_base, 6.0, dt)
+
+            PSC_all = jnp.stack([
+                PSC_ch1,
+                PSC_ch2,
+                PSC_ch3,
+                PSC_ch4
+            ])
+
+            patches = make_stn_patches()
+            masks = jnp.stack([make_mask(16, p) for p in patches])
+
+        else:
+            raise ValueError(f"Unsupported sw: {sw}")
 
     return {
         "pd": jnp.asarray(pd),
@@ -41,13 +73,14 @@ def make_condition_config(pd, stim, freq, tmax, dt):
         "tmax": jnp.asarray(tmax),
         "dt": jnp.asarray(dt),
         "stim_ts": stim_ts,
-        "Idbs": Idbs,
+        "PSC_all": PSC_all,
+        "masks": masks,
+        "sw": sw,
     }
 
+
 #%% params function
-def make_params(cfg, key0=None, n=4):
-    if n != 4:
-        raise ValueError("This version currently assumes n=4 because several connectivity matrices are hard-coded as 4x4.")
+def make_params(cfg, key0=None, n=16):
 
     if key0 is None:
         key0 = jax.random.PRNGKey(0)
@@ -60,7 +93,9 @@ def make_params(cfg, key0=None, n=4):
     tmax = cfg["tmax"]
     dt = cfg["dt"]
     stim_ts = cfg["stim_ts"]
-    Idbs = jnp.asarray(cfg["Idbs"])
+    PSC_all = cfg["PSC_all"]
+    masks = cfg["masks"]
+    sw = cfg["sw"]
 
     # population sizes
     n_th = n
@@ -75,12 +110,16 @@ def make_params(cfg, key0=None, n=4):
 
     # random keys for connectivity
     (
+        key_stn_gpi,
+        key_stn_gpe,
+        key_gpe_gpi,
+        key_gpe_gpe,
         key_pyr,
         key_pyr_th,
         key_th_pyr,
         key_pyr_stn,
         key_th_fsi,
-    ) = jax.random.split(key0, 5)
+    ) = jax.random.split(key0, 9)
 
     params = {
         "condition": {
@@ -91,7 +130,9 @@ def make_params(cfg, key0=None, n=4):
             "tmax": tmax,
             "dt": dt,
             "stim_ts": stim_ts,
-            "Idbs": Idbs,
+            "PSC_all": PSC_all,
+            "masks": masks,
+            "sw": sw,
         },
 
         "sizes": {
@@ -499,100 +540,88 @@ def make_params(cfg, key0=None, n=4):
             "gpi_to_th": jnp.eye(n_th, n_gpi),
 
             "istr_to_gpe": jnp.eye(n_gpe, n_istr),
+
             "dstr_to_gpi": jnp.eye(n_gpi, n_dstr),
 
-            "stn_to_gpe": jnp.array([
-                [1, 1, 0, 0],
-                [0, 1, 1, 0],
-                [0, 0, 1, 1],
-                [1, 0, 0, 1],
-            ], dtype=jnp.float32),
+            "stn_to_gpe": w_matrix_random(
+                key_stn_gpe,
+                n=n_stn,
+                p=n_gpe,
+                k=8,),
 
-            "stn_to_gpi": jnp.array([
-                [1, 1, 0, 0],
-                [0, 1, 1, 0],
-                [0, 0, 1, 1],
-                [1, 0, 0, 1],
-            ], dtype=jnp.float32),
+            "stn_to_gpi": w_matrix_random(
+                key_stn_gpi,
+                n=n_stn,
+                p=n_gpi,
+                k=8,),
 
-            "gpe_to_gpi": jnp.array([
-                [0, 0, 1, 1],
-                [1, 0, 0, 1],
-                [1, 1, 0, 0],
-                [0, 1, 1, 0],
-            ], dtype=jnp.float32),
+            "gpe_to_gpi": w_matrix_random(
+                key_gpe_gpi,
+                n=n_gpe,
+                p=n_gpi,
+                k=8,),
 
-            "gpe_to_gpe": jnp.array([
-                [0, 0, 1, 1],
-                [1, 0, 0, 1],
-                [1, 1, 0, 0],
-                [0, 1, 1, 0],
-            ], dtype=jnp.float32),
+            "gpe_to_gpe": w_matrix_random(
+                key_gpe_gpe,
+                n=n_gpe,
+                p=n_gpe,
+                k=8,),
 
-            "dstr_to_dstr": jnp.array([
-                [0, 1, 1, 1],
-                [1, 0, 1, 1],
-                [1, 1, 0, 1],
-                [1, 1, 1, 0],
-            ], dtype=jnp.float32),
+            "dstr_to_dstr": w_matrix_random(
+                key_pyr_stn,
+                n=n_dstr,
+                p=n_dstr,
+                k=15,),
 
             "istr_to_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float32),
 
             "fsi_to_fsi": (
                 jnp.ones((n_ctx_fsi, n_ctx_fsi), dtype=jnp.float32)
-                - jnp.eye(n_ctx_fsi, dtype=jnp.float32)
-            ),
+                - jnp.eye(n_ctx_fsi, dtype=jnp.float32)),
 
             "pyr_to_pyr": init_connectivity_divergence(
                 key=key_pyr,
                 n_post=n_ctx_pyr,
                 n_pre=n_ctx_pyr,
                 wsyn=9,
-                divergence=6,
-            ),
+                divergence=6,),
 
             "pyr_to_fsi": jnp.ones((n_ctx_fsi, n_ctx_pyr), dtype=jnp.float32),
 
             "fsi_to_pyr": jnp.ones((n_ctx_pyr, n_ctx_fsi), dtype=jnp.float32),
 
             "pyr_to_dstr": (
-                jnp.ones((n_dstr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA)
-            ),
+                jnp.ones((n_dstr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA)),
 
             "pyr_to_istr": (
-                jnp.ones((n_istr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA)
-            ),
+                jnp.ones((n_istr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA)),
 
             "pyr_to_th": init_connectivity_convergence(
                 key=key_pyr_th,
                 n_post=n_th,
                 n_pre=n_ctx_pyr,
                 wsyn=1,
-                convergence=4,
-            ),
+                convergence=4,),
 
             "th_to_pyr": init_connectivity_divergence(
                 key=key_th_pyr,
                 n_post=n_ctx_pyr,
                 n_pre=n_th,
                 wsyn=5,
-                divergence=6,
-            ),
+                divergence=6,),
 
             "pyr_to_stn": w_matrix_random(
                 key_pyr_stn,
                 n=n_ctx_pyr,
                 p=n_stn,
-                k=5,
-            ),
+                k=5,),
 
             "th_to_fsi": init_connectivity_divergence(
                 key=key_th_fsi,
                 n_post=n_ctx_fsi,
                 n_pre=n_th,
                 wsyn=1,
-                divergence=2,
-            ),
+                divergence=2,),
         },
     }
 
@@ -714,7 +743,10 @@ def bg_rhs(t, y, args):
     cond = params["condition"]
     pd = cond["pd"]
     DA = cond["DA"]
-    Idbs = cond["Idbs"]
+    dt = cond["dt"]
+    PSC_all = cond["PSC_all"]
+    masks   = cond["masks"]
+    stim_ts = cond["stim_ts"]
 
     # neurons
     p_th = params["neurons"]["th"]
@@ -923,8 +955,11 @@ def bg_rhs(t, y, args):
     Iahp2 = p_stn["gahp"] * (V2 - p_stn["Ek"]) * (CA2 / (CA2 + p_stn["k1"]))
 
     Iappstn = p_stn["Iapp"]
-
-    I_dbs = dbs_current(t, cond) #DBS current
+    
+    #DBS post synaptic current
+    t_idx = jnp.clip((t / dt).astype(jnp.int32), 0, PSC_all.shape[1]-1) # time index
+    PSC_t = PSC_all[:, t_idx]   # current at time index
+    I_dbs_vec = PSC_t @ masks   # current projects onto neurons  
 
     # GPe 
     Il3 = p_gpe["gl"] * (V3 - p_gpe["El"])
@@ -1137,7 +1172,7 @@ def bg_rhs(t, y, args):
     dR1dt = (r1 - R1) / tr1
 
     # STN
-    dV2dt = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn + Iappstn + I_dbs) / p_stn["Cm"]
+    dV2dt = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn + Iappstn + I_dbs_vec) / p_stn["Cm"]
     dN2dt = 0.75 * (n2 - N2) / tn2
     dH2dt = 0.75 * (h2 - H2) / th2
     dR2dt = 0.2 * (r2 - R2) / tr2
@@ -1551,18 +1586,19 @@ dt_save = 1
 
 # 1. choose condition
 cfg = make_condition_config(
-    pd=1,        # healthy
-    stim=0,      # DBS off
+    pd=1,        # healthy / PD
+    stim=1,      # DBS off /on
     freq=130.0,
     tmax=tmax,
     dt=dt0,
+    sw = 2,
 )
 
 # 2. build parameter tree
 params = make_params(
     cfg=cfg,
     key0=jax.random.PRNGKey(0),
-    n=4,
+    n=16,
 )
 
 # 3. define initial state
@@ -1884,12 +1920,5 @@ plt.ylabel("Rate (Hz)")
 plt.title("GPi population rate")
 plt.legend()
 plt.show()
-
-
-
-
-
-
-
 
 # %%
