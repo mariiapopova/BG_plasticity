@@ -18,6 +18,46 @@ import matplotlib.mlab as mlab
 jax.config.update("jax_enable_x64", True)
 print(jax.devices())
 
+#%% run simulation
+tmax = 1000.0
+chunk_size = 100.0      # 1 second per chunk
+dt0 = 0.01
+dt_save = 1           
+
+# 1. choose condition
+cfg = make_condition_config(
+    pd=1,        # healthy / PD
+    stim=1,      # DBS off /on
+    freq=130.0,
+    tmax=tmax,
+    dt=dt0,
+    sw = 2,
+)
+
+# 2. build parameter tree
+params = make_params(
+    cfg=cfg,
+    key0=jax.random.PRNGKey(0),
+    n=16,
+)
+
+# 3. define initial state
+y0 = make_initial_state(
+    params=params,
+    key=jax.random.PRNGKey(0)
+)
+
+# 4. run simulation
+res = simulate_last_chunk_euler(
+    y0, 
+    params, 
+    tmax, 
+    dt0, 
+    dt_save, 
+    chunk_size)
+
+
+#%% validate model
 
 # shared validation setup
 population_order = [
