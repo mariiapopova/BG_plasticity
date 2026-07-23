@@ -18,13 +18,14 @@ def Initial():
     #%% Set initial conditions
     
     #time variables
-    tmax=10000              #maximum time (ms)
+    tmax=1000              #maximum time (ms)
     dt=0.01                #timestep (ms)
     t=np.arange(0,tmax,dt) #time vector
     n=12                   #number of neurons in each nucleus (TH, STN, GPe, GPi)
     f=130 #for continuous
     f1 = 200 #for theta high
-    f2 = 50 #for theta low
+    f2 = 100 #for theta low
+    f3 = 150 #for theta intermidiate
     sw1 = 0 #theta is off
     sw2 = 1 #theta is on
     
@@ -54,6 +55,8 @@ def Initial():
     #dbs theta low
     vsn4, vge4, vgi4, vth4, vstr4, bla4 = FOGnetwork(1,1,f2,Istim,timespike,tmax, dt, v1, v2, v3, v4, v7, n, sw2) #PD with DBS theta low
     #dbs3 = plotres(vsn4, vge4, vgi4, vth4, vstr4, t,timespike,tmax,Istim,dt)
+    vsn5, vge5, vgi5, vth5, vstr5, bla5 = FOGnetwork(1,1,f3,Istim,timespike,tmax, dt, v1, v2, v3, v4, v7, n, sw2) #PD with DBS theta interm
+    #dbs3 = plotres(vsn4, vge4, vgi4, vth4, vstr4, t,timespike,tmax,Istim,dt)
     
     print("--- %s seconds ---" % (time.time() - start_time))
     
@@ -62,6 +65,7 @@ def Initial():
            vsn2, vge2, vgi2, vth2, vstr2, bla2,\
            vsn3, vge3, vgi3, vth3, vstr3, bla3,\
            vsn4, vge4, vgi4, vth4, vstr4, bla4,\
+           vsn5, vge5, vgi5, vth5, vstr5, bla5,\
            t, timespike, tmax)
 
 if __name__ == "__main__":
