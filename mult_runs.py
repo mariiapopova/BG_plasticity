@@ -27,6 +27,7 @@ for i in range(n):
     vsn2, vge2, vgi2, vth2, vstr2, bla2,\
     vsn3, vge3, vgi3, vth3, vstr3, bla3,\
     vsn4, vge4, vgi4, vth4, vstr4, bla4,\
+    vsn5, vge5, vgi5, vth5, vstr5, bla5,\
     t, timespike, tmax=Initial()
     
     #for healthy
@@ -91,6 +92,18 @@ for i in range(n):
     GN4=calculateEI(t,vth4,timespike,tmax) #for thalamus
     #GN2=calculateEI(t,vppn,timespike,tmax) #for PPN
 
+    #for dbs3
+    ##calculate freqeuncy for plotting
+    fr1_5=findfreq(vsn5[0,:])
+    fr2_5=findfreq(vge5[0,:])
+    fr3_5=findfreq(vgi5[0,:])  
+    fr5_5=findfreq(vth5[0,:])
+    fr6_5=findfreq(vstr5[0,:])
+    
+    ##Calculation of error index
+    GN5=calculateEI(t,vth5,timespike,tmax) #for thalamus
+    #GN2=calculateEI(t,vppn,timespike,tmax) #for PPN
+
     #GPe spectras
     sig = vge[0]
     fft_res = np.abs(np.fft.rfft(np.fft.ifftshift(sig-np.mean(sig))))
@@ -111,6 +124,10 @@ for i in range(n):
     sig4 = vge4[0]
     fft_res4 = np.abs(np.fft.rfft(np.fft.ifftshift(sig4-np.mean(sig4))))
     ff_freqs4 = np.fft.rfftfreq(n= sig4.shape[0],d = 1e-5)
+
+    sig5 = vge5[0]
+    fft_res5 = np.abs(np.fft.rfft(np.fft.ifftshift(sig5-np.mean(sig5))))
+    ff_freqs5 = np.fft.rfftfreq(n= sig5.shape[0],d = 1e-5)
         
     ##create dictionaries
     h_data = {"sn": fr1, "ge": fr2, 'gi': fr3, 'th': fr5, 'str': fr6, 'ei': GN, 'four_freq': ff_freqs, 'four_res': fft_res}    
@@ -123,11 +140,15 @@ for i in range(n):
 
     dbs_lt_data = {'four_freq': ff_freqs4, 'four_res': fft_res4}
 
+    dbs_it_data = {'four_freq': ff_freqs5, 'four_res': fft_res5}
+
     dbs_data1 = {"sn": fr1_3, "ge": fr2_3, 'gi': fr3_3, 'th': fr5_3, 'str': fr6_3, 'ei': GN3} 
 
-    dbs_data2 = {"sn": fr1_4, "ge": fr2_4, 'gi': fr3_4, 'th': fr5_4, 'str': fr6_4, 'ei': GN4} 
+    dbs_data2 = {"sn": fr1_4, "ge": fr2_4, 'gi': fr3_4, 'th': fr5_4, 'str': fr6_4, 'ei': GN4}
 
-    datalist = [h_data, pd_data, dbs_data, dbs_ht_data, dbs_lt_data, dbs_data1, dbs_data2]          
+    dbs_data3 = {"sn": fr1_5, "ge": fr2_5, 'gi': fr3_5, 'th': fr5_5, 'str': fr6_5, 'ei': GN5}  
+
+    datalist = [h_data, pd_data, dbs_data, dbs_ht_data, dbs_lt_data, dbs_data1, dbs_data2, dbs_it_data, dbs_data3]          
     
     ##write into a file
     pickle.dump(datalist, file)
@@ -189,6 +210,13 @@ th_dbs2=np.zeros(np.shape(c_ar)[0])
 stri_dbs2=np.zeros(np.shape(c_ar)[0])
 ei_dbs2=np.zeros(np.shape(c_ar)[0])
 
+sn_dbs3=np.zeros(np.shape(c_ar)[0])
+ge_dbs3=np.zeros(np.shape(c_ar)[0])
+gi_dbs3=np.zeros(np.shape(c_ar)[0])
+th_dbs3=np.zeros(np.shape(c_ar)[0])
+stri_dbs3=np.zeros(np.shape(c_ar)[0])
+ei_dbs3=np.zeros(np.shape(c_ar)[0])
+
 f_freq_h = np.zeros((len(c_ar[:,2][0]['four_freq']), np.shape(c_ar)[0]))
 f_res_h = np.zeros((len(c_ar[:,2][0]['four_freq']), np.shape(c_ar)[0]))
 
@@ -203,6 +231,9 @@ f_res_dbsht = np.zeros((len(c_ar[:,2][0]['four_freq']), np.shape(c_ar)[0]))
 
 f_freq_dbslt = np.zeros((len(c_ar[:,2][0]['four_freq']), np.shape(c_ar)[0]))
 f_res_dbslt = np.zeros((len(c_ar[:,2][0]['four_freq']), np.shape(c_ar)[0]))
+
+f_freq_dbsit = np.zeros((len(c_ar[:,2][0]['four_freq']), np.shape(c_ar)[0]))
+f_res_dbsit = np.zeros((len(c_ar[:,2][0]['four_freq']), np.shape(c_ar)[0]))
 
 #%%
 #convenient format
@@ -256,6 +287,16 @@ for i in range(np.shape(c_ar)[0]):
     th_dbs2[i]=c_ar[:,6][i]['th']
     stri_dbs2[i]=c_ar[:,6][i]['str']
     ei_dbs2[i]=c_ar[:,6][i]['ei'] 
+
+    f_freq_dbsit[:,i]=c_ar[:,7][i]['four_freq']
+    f_res_dbsit[:,i]=c_ar[:,7][i]['four_res']
+
+    sn_dbs3[i]=c_ar[:,8][i]['sn']
+    ge_dbs3[i]=c_ar[:,8][i]['ge']
+    gi_dbs3[i]=c_ar[:,8][i]['gi']
+    th_dbs3[i]=c_ar[:,8][i]['th']
+    stri_dbs3[i]=c_ar[:,8][i]['str']
+    ei_dbs3[i]=c_ar[:,8][i]['ei'] 
 
 #means and stds
 ei_mean=np.mean(ei)
@@ -328,39 +369,55 @@ gi_std_dbs2=np.std(gi_dbs2)
 th_std_dbs2=np.std(th_dbs2)
 stri_std_dbs2=np.std(stri_dbs2)
 
+ei_mean_dbs3=np.mean(ei_dbs3)
+sn_mean_dbs3=np.mean(sn_dbs3)
+ge_mean_dbs3=np.mean(ge_dbs3)
+gi_mean_dbs3=np.mean(gi_dbs3)
+th_mean_dbs3=np.mean(th_dbs3)
+stri_mean_dbs3=np.mean(stri_dbs3)
+
+ei_std_dbs3=np.std(ei_dbs3)
+sn_std_dbs3=np.std(sn_dbs3)
+ge_std_dbs3=np.std(ge_dbs3)
+gi_std_dbs3=np.std(gi_dbs3)
+th_std_dbs3=np.std(th_dbs3)
+stri_std_dbs3=np.std(stri_dbs3)
+
 fr_mean_h = np.mean(f_freq_h,axis=1)
 res_mean_h = np.mean(f_res_h,axis=1)
 res_mean_pd = np.mean(f_res_pd,axis=1)
 res_mean_dbs = np.mean(f_res_dbs,axis=1)
 res_mean_dbsht = np.mean(f_res_dbsht,axis=1)
 res_mean_dbslt = np.mean(f_res_dbslt,axis=1)
+res_mean_dbsit = np.mean(f_res_dbsit,axis=1)
 res_std_h = np.std(f_res_h,axis=1)
 res_std_pd = np.std(f_res_pd,axis=1)
 res_std_dbs = np.std(f_res_dbs,axis=1)
 res_std_dbsht = np.std(f_res_dbsht,axis=1)
 res_std_dbslt = np.std(f_res_dbslt,axis=1)
+res_std_dbsit = np.std(f_res_dbsit,axis=1)
 
 #%% plotting
-state = ['Healthy', 'PD', 'DBS','DBS High Theta', 'DBS Low Theta']
+state = ['Healthy', 'PD', 'DBS','DBS High Theta', 'DBS Low Theta' , 'DBS Inter Theta']
 x_pos = np.arange(len(state))
 
-ei=np.array([ei_mean, ei_mean_pd, ei_mean_dbs,ei_mean_dbs1,ei_mean_dbs2])
-ei_std_full=np.array([ei_std, ei_std_pd, ei_std_dbs,ei_std_dbs1,ei_std_dbs2])
+ei=np.array([ei_mean, ei_mean_pd, ei_mean_dbs,ei_mean_dbs1,ei_mean_dbs2,ei_mean_dbs3])
+ei_std_full=np.array([ei_std, ei_std_pd, ei_std_dbs,ei_std_dbs1,ei_std_dbs2,ei_std_dbs3])
 
-sn=np.array([sn_mean, sn_mean_pd, sn_mean_dbs,sn_mean_dbs1,sn_mean_dbs2])
-sn_std_full=np.array([sn_std, sn_std_pd, sn_std_dbs,sn_std_dbs1,sn_std_dbs2])
+sn=np.array([sn_mean, sn_mean_pd, sn_mean_dbs,sn_mean_dbs1,sn_mean_dbs2,sn_mean_dbs3])
+sn_std_full=np.array([sn_std, sn_std_pd, sn_std_dbs,sn_std_dbs1,sn_std_dbs2,sn_std_dbs3])
 
-ge=np.array([ge_mean, ge_mean_pd, ge_mean_dbs,ge_mean_dbs1,ge_mean_dbs2])
-ge_std_full=np.array([ge_std, ge_std_pd, ge_std_dbs,ge_std_dbs1,ge_std_dbs2])
+ge=np.array([ge_mean, ge_mean_pd, ge_mean_dbs,ge_mean_dbs1,ge_mean_dbs2,ge_mean_dbs3])
+ge_std_full=np.array([ge_std, ge_std_pd, ge_std_dbs,ge_std_dbs1,ge_std_dbs2,ge_std_dbs3])
 
-gi=np.array([gi_mean, gi_mean_pd, gi_mean_dbs,gi_mean_dbs1,gi_mean_dbs2])
-gi_std_full=np.array([gi_std, gi_std_pd, gi_std_dbs,gi_std_dbs1,gi_std_dbs2])
+gi=np.array([gi_mean, gi_mean_pd, gi_mean_dbs,gi_mean_dbs1,gi_mean_dbs2,gi_mean_dbs3])
+gi_std_full=np.array([gi_std, gi_std_pd, gi_std_dbs,gi_std_dbs1,gi_std_dbs2,gi_std_dbs3])
 
-th=np.array([th_mean, th_mean_pd, th_mean_dbs,th_mean_dbs1,th_mean_dbs2])
-th_std_full=np.array([th_std, th_std_pd, th_std_dbs,th_std_dbs1,th_std_dbs2])
+th=np.array([th_mean, th_mean_pd, th_mean_dbs,th_mean_dbs1,th_mean_dbs2,th_mean_dbs3])
+th_std_full=np.array([th_std, th_std_pd, th_std_dbs,th_std_dbs1,th_std_dbs2,th_std_dbs3])
 
-stri=np.array([stri_mean, stri_mean_pd, stri_mean_dbs,stri_mean_dbs1,stri_mean_dbs2])
-stri_std_full=np.array([stri_std, stri_std_pd, stri_std_dbs,stri_std_dbs1,stri_std_dbs2])
+stri=np.array([stri_mean, stri_mean_pd, stri_mean_dbs,stri_mean_dbs1,stri_mean_dbs2,stri_mean_dbs3])
+stri_std_full=np.array([stri_std, stri_std_pd, stri_std_dbs,stri_std_dbs1,stri_std_dbs2,stri_std_dbs3])
 
 def plot(mean, std, title, lable):
     fig, ax = plt.subplots()
@@ -389,8 +446,10 @@ plt.plot(fr_mean_h[:50],res_mean_dbs[:50],label='cDBS, 130 Hz')
 plt.fill_between(fr_mean_h[:50],res_mean_dbs[:50]-res_std_dbs[:50],res_mean_dbs[:50]+res_std_dbs[:50],alpha=0.1,color='green')
 plt.plot(fr_mean_h[:50],res_mean_dbsht[:50],label='tDBS, 200 Hz')
 plt.fill_between(fr_mean_h[:50],res_mean_dbsht[:50]-res_std_dbsht[:50],res_mean_dbsht[:50]+res_std_dbsht[:50],alpha=0.1,color='red')
-plt.plot(fr_mean_h[:50],res_mean_dbslt[:50],label='tDBS, 50 Hz')
+plt.plot(fr_mean_h[:50],res_mean_dbslt[:50],label='tDBS, 100 Hz')
 plt.fill_between(fr_mean_h[:50],res_mean_dbslt[:50]-res_std_dbslt[:50],res_mean_dbslt[:50]+res_std_dbslt[:50],alpha=0.1,color='purple')
+plt.plot(fr_mean_h[:50],res_mean_dbsit[:50],label='tDBS, 150 Hz')
+plt.fill_between(fr_mean_h[:50],res_mean_dbsit[:50]-res_std_dbsit[:50],res_mean_dbsit[:50]+res_std_dbsit[:50],alpha=0.1,color='brown')
 plt.ylabel('Amplitude [a.u.]')
 plt.xlabel('Frequency [Hz]')
 plt.legend()
