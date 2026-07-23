@@ -8,7 +8,16 @@ import numpy as np
 from numba import jit
 
 @jit(nopython=True, cache=True)
-def dbssyn(f,tmax,dt,sw):
+def repeat_stack(fir, zer, n):
+    m = fir.size
+    out = np.empty((2 * n * m,), fir.dtype)
+    for i in range(n):
+        out[2*i*m : (2*i+1)*m] = fir
+        out[(2*i+1)*m : (2*i+2)*m] = zer
+    return out
+
+@jit(nopython=True, cache=True)
+def dbssyn(f,tmax,dt,sw,shift=0):
     #transmission + synaptic delay: td 
     td=0 #2 ms for trasmission and .5 ms for synaptic delay prev-2
     ti=0 
@@ -80,13 +89,13 @@ def dbssyn(f,tmax,dt,sw):
             w=-1
             
         for p in range(np.shape(A)[1]): #check!!
-            T=round((tmax/fdbs)/dt)
+            T=round((1000/fdbs)/dt)
             dbs=np.arange(dbsi,dbsf,T)
             ts=dbs.astype(np.int64)    #uncomment for DBS only
-            fir=np.ones(int((tmax/dt)/10))
-            zer=np.zeros(int((tmax/dt)/10))
+            fir=np.ones(int((1000/dt)/10))
+            zer=np.zeros(int((1000/dt)/10))
             if sw==1:
-                turner = np.hstack((fir,zer,fir,zer,fir,zer,fir,zer,fir,zer))
+                turner = repeat_stack(fir,zer,int(tmax/100))
             else:
                 turner = np.ones(int(tmax/dt))
             sp[ts]=1/dt
