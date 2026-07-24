@@ -44,6 +44,16 @@ n_ctx_pyr = default_n * 20
 
 #%% parameters
 # parameters in a dict (PyTree)
+
+def _make_shifted_weight(n_rows, n_cols, shifts):
+    """Create a sparse circular-connectivity matrix with a few shifted links."""
+    W = np.zeros((n_rows, n_cols), dtype=np.float64)
+    for row in range(n_rows):
+        for shift in shifts:
+            W[row, (row + shift) % n_cols] = 1.0
+    return jnp.array(W, dtype=jnp.float64)
+
+
 base_params = {
     "pd": 0,
     # membrane params
@@ -97,22 +107,10 @@ base_params = {
     "w_gpe_istr": jnp.eye(n_istr, n_gpe),
     "w_gpe_dstr": jnp.eye(n_dstr, n_gpe),
     # 2 : 1 connectivity for self-inhibtion
-    "w_gpe_stn": jnp.array([
-       [1,0,0,1],
-       [1,1,0,0],
-       [0,1,1,0],
-       [0,0,1,1],], dtype=jnp.float64),
-    "w_gpe_gpi": jnp.array([
-        [0,0,1,1],
-        [1,0,0,1],
-        [1,1,0,0],
-        [0,1,1,0],], dtype=jnp.float64),
+    "w_gpe_stn": _make_shifted_weight(n_gpe, n_stn, (0, -1)),
+    "w_gpe_gpi": _make_shifted_weight(n_gpe, n_gpi, (-1, -2)),
     # 3 : 1 connectivity in direct striatum
-    "w_dstr": jnp.array([
-        [0,1,1,1],
-        [1,0,1,1],
-        [1,1,0,1],
-        [1,1,1,0],], dtype=jnp.float64),
+    "w_dstr": jnp.ones((n_dstr, n_dstr), dtype=jnp.float64) - jnp.eye(n_dstr, dtype=jnp.float64),
     # 4 : 1 connectivity in indirect striatum
     "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float64),
     
@@ -1530,7 +1528,7 @@ plt.show()
 # plt.show()
 
 # %% model validation
-pop_quest = population_voltages
+pop_quest = population_voltages_pd
 volt_quest = results[4][0] #gpi
 
 #1. mean Hz rate
