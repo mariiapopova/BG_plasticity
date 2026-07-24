@@ -2,6 +2,11 @@
 #%%
 # choose device to do calculations on
 import os
+
+# Force JAX to use the CPU
+#os.environ["JAX_PLATFORMS"] = "cpu"
+
+
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 os.chdir(r"/home/mpopova/projects/vCR/BG_plasticity")
@@ -13,13 +18,16 @@ from jax import random
 import jax.numpy as jnp
 import diffrax
 import matplotlib.pyplot as plt
+from scipy.stats import ttest_ind, f_oneway
 from additional_functions import *
 from checkfreq import *
 import matplotlib.mlab as mlab
 from dbssyn import *
 
 jax.config.update("jax_enable_x64", True)
-print(jax.devices())
+print("JAX backend:", jax.default_backend())
+print("Available devices:", jax.devices())
+#print(jax.devices())
 
 #%%
 # define neuron parameters 
@@ -83,26 +91,12 @@ base_params = {
 
     # connectivity matrix
     # 1 : 1 connectivity
-    #"w_gpe_stn": jnp.eye(n_stn, n_gpe),
-    #"w_stn_gpe": jnp.eye(n_gpe, n_stn),
     "w_gpi_th":  jnp.eye(n_th, n_gpi),
-    #"w_gpe_gpi": jnp.eye(n_gpi, n_gpe),
-    #"w_stn_gpi": jnp.eye(n_gpi, n_stn),
     "w_istr_gpe": jnp.eye(n_gpe, n_istr),
     "w_dstr_gpi": jnp.eye(n_gpi, n_dstr),
     "w_gpe_istr": jnp.eye(n_istr, n_gpe),
     "w_gpe_dstr": jnp.eye(n_dstr, n_gpe),
     # 2 : 1 connectivity for self-inhibtion
-    # "w_stn_gpe": jnp.array([
-    #     [1,1,0,0],
-    #     [0,1,1,0],
-    #     [0,0,1,1],
-    #     [1,0,0,1],], dtype=jnp.float64),
-    # "w_stn_gpi": jnp.array([
-    #     [1,1,0,0],
-    #     [0,1,1,0],
-    #     [0,0,1,1],
-    #     [1,0,0,1],], dtype=jnp.float64),
     "w_gpe_stn": jnp.array([
        [1,0,0,1],
        [1,1,0,0],
@@ -113,19 +107,14 @@ base_params = {
         [1,0,0,1],
         [1,1,0,0],
         [0,1,1,0],], dtype=jnp.float64),
-    # "w_gpe_gpe": jnp.array([
-    #     [0,0,1,1],
-    #     [1,0,0,1],
-    #     [1,1,0,0],
-    #     [0,1,1,0],], dtype=jnp.float64),
     # 3 : 1 connectivity in direct striatum
     "w_dstr": jnp.array([
         [0,1,1,1],
         [1,0,1,1],
         [1,1,0,1],
-        [1,1,1,0],], dtype=jnp.float32),
+        [1,1,1,0],], dtype=jnp.float64),
     # 4 : 1 connectivity in indirect striatum
-    "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float32),
+    "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float64),
     
     # all-to-all connectivity in FSI-FSI CTX
     "w_fsi": jnp.ones((n_ctx_fsi, n_ctx_fsi), dtype=jnp.float64) - jnp.eye(n_ctx_fsi, dtype=jnp.float64),
@@ -139,7 +128,6 @@ base_params = {
     "w_pyr_str": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_dstr, k = 5),
     "w_pyr_stn": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_stn, k = 5),
     "w_pyr_th": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_th, k = 4),
-    #"w_pyr_str":  jnp.ones((n_dstr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA),
     "w_th_pyr": w_matrix_divergent(jax.random.PRNGKey(0), n = n_th,p= n_ctx_pyr, k = 6),
     "w_th_fsi": w_matrix_divergent(jax.random.PRNGKey(0), n = n_th,p= n_ctx_fsi, k = 2),
 }
@@ -811,6 +799,125 @@ y0 = {
     "S7_ctx":  jnp.zeros((n_ctx_fsi,)),
 }
 
+# keep a base initial state for repeated randomized runs
+base_y0 = dict(y0)
+
+# helper to make a randomized initial condition from a base state
+def make_y0(seed, base_y0):
+    key = jax.random.PRNGKey(seed)
+    keys = jax.random.split(key, 11)
+
+    def noise(init, k):
+        return init + 2.0 * jax.random.normal(k, init.shape)
+
+    def noise_sm(init, k):
+        return init + 0.05 * jax.random.normal(k, init.shape)
+
+    y0_new = dict(base_y0)
+
+    # randomize voltages
+    y0_new["V1_th"]  = noise(base_y0["V1_th"], keys[0])
+    y0_new["V2_stn"] = noise(base_y0["V2_stn"], keys[1])
+    y0_new["V3_gpe"] = noise(base_y0["V3_gpe"], keys[2])
+    y0_new["V4_gpi"] = noise(base_y0["V4_gpi"], keys[3])
+    y0_new["V5_dstr"] = noise(base_y0["V5_dstr"], keys[4])
+    y0_new["V5_istr"] = noise(base_y0["V5_istr"], keys[5])
+    y0_new["V6_ctx"] = noise(base_y0["V6_ctx"], keys[6])
+    y0_new["V7_ctx"] = noise(base_y0["V7_ctx"], keys[7])
+
+
+    # recompute TH gates
+    y0_new["H1_th"] = th_hinf(y0_new["V1_th"])
+    y0_new["R1_th"] = th_rinf(y0_new["V1_th"])
+
+
+    # recompute STN gates
+    y0_new["N2_stn"] = stn_ninf(y0_new["V2_stn"])
+    y0_new["H2_stn"] = stn_hinf(y0_new["V2_stn"])
+    y0_new["R2_stn"] = stn_rinf(y0_new["V2_stn"])
+    y0_new["C2_stn"] = stn_cinf(y0_new["V2_stn"])
+
+
+    # recompute GPe gates
+    y0_new["N3_gpe"] = gpe_ninf(y0_new["V3_gpe"])
+    y0_new["H3_gpe"] = gpe_hinf(y0_new["V3_gpe"])
+    y0_new["R3_gpe"] = gpe_rinf(y0_new["V3_gpe"])
+
+
+    # recompute GPi gates
+    y0_new["N4_gpi"] = gpe_ninf(y0_new["V4_gpi"])
+    y0_new["H4_gpi"] = gpe_hinf(y0_new["V4_gpi"])
+    y0_new["R4_gpi"] = gpe_rinf(y0_new["V4_gpi"])
+
+
+    # recompute striatum gates
+    V = y0_new["V5_dstr"]
+    y0_new["m5_dstr"] = str_alpham(V)/(str_alpham(V)+str_betam(V))
+    y0_new["h5_dstr"] = str_alphah(V)/(str_alphah(V)+str_betah(V))
+    y0_new["n5_dstr"] = str_alphan(V)/(str_alphan(V)+str_betan(V))
+    y0_new["p5_dstr"] = str_alphap(V)/(str_alphap(V)+str_betap(V))
+
+    V = y0_new["V5_istr"]
+    y0_new["m5_istr"] = str_alpham(V)/(str_alpham(V)+str_betam(V))
+    y0_new["h5_istr"] = str_alphah(V)/(str_alphah(V)+str_betah(V))
+    y0_new["n5_istr"] = str_alphan(V)/(str_alphan(V)+str_betan(V))
+    y0_new["p5_istr"] = str_alphap(V)/(str_alphap(V)+str_betap(V))
+
+
+    # recompute cortex gates
+    y0_new["N6_ctx"] = stn_ninf(y0_new["V6_ctx"])
+    y0_new["H6_ctx"] = stn_hinf(y0_new["V6_ctx"])
+    y0_new["R6_ctx"] = stn_rinf(y0_new["V6_ctx"])
+    y0_new["C6_ctx"] = stn_cinf(y0_new["V6_ctx"])
+
+    y0_new["N7_ctx"] = stn_ninf(y0_new["V7_ctx"])
+    y0_new["H7_ctx"] = stn_hinf(y0_new["V7_ctx"])
+    y0_new["R7_ctx"] = stn_rinf(y0_new["V7_ctx"])
+    y0_new["C7_ctx"] = stn_cinf(y0_new["V7_ctx"])
+
+    y0_new["W"]  = jax.random.uniform(keys[8], shape=base_y0["W"].shape,minval=0.85,maxval=1.0)
+    y0_new["W1"]  = jax.random.uniform(keys[9], shape=base_y0["W1"].shape,minval=0.85,maxval=1.0)
+    y0_new["W2"]  = jax.random.uniform(keys[10], shape=base_y0["W2"].shape,minval=0.45,maxval=0.6)
+
+    # y0_new["W"]  = noise_sm(base_y0["W"], keys[8])
+    # y0_new["W1"] = noise_sm(base_y0["W1"], keys[9])
+    # y0_new["W2"] = noise_sm(base_y0["W2"], keys[10])
+
+    return y0_new
+
+# compute PSD from a single voltage trace
+def compute_psd(signal):
+    sig = signal - jnp.mean(signal)
+    return jnp.abs(jnp.fft.rfft(sig))
+
+# # run one random initial-condition simulation and return the GPi PSD
+# def run_gpi_psd(seed, params, base_y0):
+#     y0_rand = make_y0(seed, base_y0)
+#     _, _, _, _, V4, _, _, _, _, _, _, _ = simulate_last_chunk_euler(
+#         y0_rand, params, tmax, dt0, dt_save, chunk_size
+#     )
+#     return compute_psd(V4[:, 0])
+
+# # compute mean PSD over multiple random runs in batches
+# def mean_gpi_psd(params, base_y0, n_runs=20, batch_size=5):
+#     seeds = jnp.arange(n_runs)
+#     psd_sum = None
+#     n_done = 0
+
+#     for i in range(0, n_runs, batch_size):
+#         batch_seeds = seeds[i : i + batch_size]
+#         batch_psd = jax.vmap(lambda s: run_gpi_psd(s, params, base_y0))(batch_seeds)
+#         batch_sum = jnp.sum(batch_psd, axis=0)
+
+#         if psd_sum is None:
+#             psd_sum = batch_sum
+#         else:
+#             psd_sum = psd_sum + batch_sum
+
+#         n_done += batch_psd.shape[0]
+
+#     return psd_sum / n_done
+
 #%% chunked Euler solver
 def run_chunk_euler_scan(y0, params, t0, dt,chunk_length):
     n_steps =chunk_length//dt
@@ -963,8 +1070,6 @@ params_dbsthi = {
     "dt": dt0,
     "Idbs_current": jnp.array(Idbs_current_thinter),
 }
-
-# ts, V1, V2, V3, V4, V5d, V5i, V6, V7, W, W1, W2 = simulate_last_chunk_euler(y0, params, tmax, dt0, dt_save, chunk_size)
 # ts_pd, V1_pd, V2_pd, V3_pd, V4_pd, V5d_pd, V5i_pd, V6_pd, V7_pd, W_pd, W1_pd, W2_pd = simulate_last_chunk_euler(y0, params_pd, tmax, dt0, dt_save, chunk_size)
 
 
@@ -990,19 +1095,189 @@ params_dbsthi = {
 #     "FSI M1": V7_pd,
 # }
 
-def run_single(params):
+def run_single_fixed(params):
     return simulate_last_chunk_euler(
         y0, params, tmax, dt0, dt_save, chunk_size
     )
 
-batched_run = jax.vmap(run_single)
+# run a single condition for one fixed initialization
+batched_run = jax.vmap(run_single_fixed)
 
+# parameter conditions batch across all condition sets
 params_batch = jax.tree.map(
     lambda *xs: jnp.stack(xs),
     params, params_pd, params_dbs, params_dbsthh, params_dbsthl, params_dbsthi
 )
 
 results = batched_run(params_batch)
+
+condition_names = [
+    "Healthy",
+    "PD",
+    "DBS",
+    "DBS theta high",
+    "DBS theta low",
+    "DBS theta inter",
+]
+
+# compute a baseline GPi PSD from the batched fixed initialization results
+gpi_fixed_psds = jax.vmap(lambda V4: compute_psd(V4[:, 0]))(results[4])
+
+# compute mean/std GPi PSD over random initial conditions for all 6 conditions
+N_RANDOM_PSD_RUNS = 100
+seeds = jnp.arange(N_RANDOM_PSD_RUNS)
+
+def run_random_gpi_psd(seed, params):
+    y0_rand = make_y0(seed, base_y0)
+    _, _, _, _, V4, _, _, _, _, _, _, _ = simulate_last_chunk_euler(
+        y0_rand, params, tmax, dt0, dt_save, chunk_size
+    )
+    return compute_psd(V4[:, 0])
+
+# fully parallel across seeds and conditions using a single batched kernel
+@jax.jit
+def compute_random_gpi_psds(seeds, params_batch):
+    return jax.vmap(
+        lambda seed: jax.vmap(
+            lambda params: run_random_gpi_psd(seed, params)
+        )(params_batch)
+    )(seeds)
+
+random_gpi_psds = compute_random_gpi_psds(seeds, params_batch)
+random_gpi_psds_np = np.array(random_gpi_psds)
+
+mean_random_gpi_psds = jnp.mean(random_gpi_psds_np, axis=0)
+std_random_gpi_psds = jnp.std(random_gpi_psds_np, axis=0)
+
+signal_length = results[4][0].shape[0]
+mean_gpi_freqs = np.fft.rfftfreq(signal_length, d= 1e-5)
+
+freq_slice = slice(8, 30)
+window_freqs = mean_gpi_freqs[freq_slice]
+
+plt.figure(figsize=(10, 6))
+for name, mean_psd, std_psd in zip(condition_names, mean_random_gpi_psds, std_random_gpi_psds):
+    mean_psd_np = np.array(mean_psd)[freq_slice]
+    std_psd_np = np.array(std_psd)[freq_slice]
+    plt.plot(window_freqs, mean_psd_np, label=name)
+    plt.fill_between(
+        window_freqs,
+        mean_psd_np - std_psd_np,
+        mean_psd_np + std_psd_np,
+        alpha=0.2,
+    )
+
+plt.xlabel("Frequency (Hz)")
+plt.ylabel("Mean GPi PSD")
+plt.title(f"Mean GPi PSD over {N_RANDOM_PSD_RUNS} random initial-condition runs")
+plt.legend(loc="upper right")
+plt.grid(True, alpha=0.4)
+plt.tight_layout()
+plt.show()
+
+# filter out 5 Hz harmonics from the same mean PSD traces and plot separately
+harmonic_base = 5.0
+notch_width = 0.5
+max_harmonic = 6
+
+filtered_mask = np.ones_like(window_freqs, dtype=bool)
+for k in range(1, max_harmonic + 1):
+    center = k * harmonic_base
+    if center < window_freqs[0] or center > window_freqs[-1]:
+        continue
+    filtered_mask &= ~(
+        (window_freqs >= center - notch_width / 2)
+        & (window_freqs <= center + notch_width / 2)
+    )
+
+plt.figure(figsize=(10, 6))
+for name, mean_psd, std_psd in zip(condition_names, mean_random_gpi_psds, std_random_gpi_psds):
+    mean_psd_np = np.array(mean_psd)[freq_slice]
+    std_psd_np = np.array(std_psd)[freq_slice]
+    mean_psd_filtered = mean_psd_np.copy()
+    mean_psd_filtered[~filtered_mask] = 0.0
+    plt.plot(window_freqs, mean_psd_filtered, label=name)
+    plt.fill_between(
+        window_freqs,
+        mean_psd_filtered - std_psd_np,
+        mean_psd_filtered + std_psd_np,
+        where=filtered_mask,
+        alpha=0.2,
+        interpolate=True,
+    )
+
+plt.xlabel("Frequency (Hz)")
+plt.ylabel("Mean GPi PSD (5 Hz harmonics removed)")
+plt.title("Mean GPi PSD with 5 Hz harmonics filtered out")
+plt.legend(loc="upper right")
+plt.grid(True, alpha=0.4)
+plt.tight_layout()
+plt.show()
+
+# statistical comparisons around 17.5 Hz
+freq_center = 17.5
+freq_band = 0.5
+full_freq_mask = (mean_gpi_freqs >= freq_center - freq_band) & (mean_gpi_freqs <= freq_center + freq_band)
+
+band_values = np.mean(random_gpi_psds_np[:, :, full_freq_mask], axis=-1)
+
+p_pd_vs_healthy = ttest_ind(band_values[:, 1], band_values[:, 0], equal_var=False).pvalue
+p_dbs_vs_pd = ttest_ind(band_values[:, 2], band_values[:, 1], equal_var=False).pvalue
+p_theta_group = f_oneway(
+    band_values[:, 3],
+    band_values[:, 4],
+    band_values[:, 5],
+).pvalue
+
+max_y = np.max([np.max(np.array(mean_psd)[freq_slice]) for mean_psd in mean_random_gpi_psds])
+stat_y_offset = max_y * 0.15
+marker_y = max_y + stat_y_offset
+
+plt.figure(figsize=(10, 6))
+for name, mean_psd, std_psd in zip(condition_names, mean_random_gpi_psds, std_random_gpi_psds):
+    mean_psd_np = np.array(mean_psd)[freq_slice]
+    std_psd_np = np.array(std_psd)[freq_slice]
+    mean_psd_filtered = mean_psd_np.copy()
+    mean_psd_filtered[~filtered_mask] = 0.0
+    plt.plot(window_freqs, mean_psd_filtered, label=name)
+    plt.fill_between(
+        window_freqs,
+        mean_psd_filtered - std_psd_np,
+        mean_psd_filtered + std_psd_np,
+        where=filtered_mask,
+        alpha=0.2,
+        interpolate=True,
+    )
+
+# annotate significance at 17.5 Hz
+if p_pd_vs_healthy < 0.05:
+    plt.scatter([freq_center], [marker_y], color="red", s=100, zorder=10, label="PD vs Healthy p<0.05")
+if p_dbs_vs_pd < 0.05:
+    plt.scatter([freq_center], [marker_y * 0.95], color="black", s=100, zorder=10, label="DBS vs PD p<0.05")
+if p_theta_group < 0.05:
+    plt.scatter([freq_center], [marker_y * 0.90], color="purple", s=100, zorder=10, label="DBS theta group p<0.05")
+
+plt.text(
+    window_freqs[-1],
+    marker_y * 0.85,
+    (
+        f"17.5 Hz band p-values:\nPD vs Healthy={p_pd_vs_healthy:.3g}, "
+        f"DBS vs PD={p_dbs_vs_pd:.3g}, "
+        f"theta group={p_theta_group:.3g}"
+    ),
+    ha="right",
+    va="top",
+    fontsize=9,
+    bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+)
+
+plt.xlabel("Frequency (Hz)")
+plt.ylabel("Mean GPi PSD (5 Hz harmonics removed)")
+plt.title("Mean GPi PSD with 5 Hz harmonics filtered out")
+plt.legend(loc="upper right")
+plt.grid(True, alpha=0.4)
+plt.tight_layout()
+plt.show()
 
 population_voltages = {
     "TH": results[1][0],
@@ -1255,7 +1530,7 @@ plt.show()
 # plt.show()
 
 # %% model validation
-pop_quest = population_voltages_dbs
+pop_quest = population_voltages
 volt_quest = results[4][0] #gpi
 
 #1. mean Hz rate
