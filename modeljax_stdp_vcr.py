@@ -4,6 +4,7 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.chdir(r"/home/mpopova/projects/vCR/BG_plasticity")
 
 import numpy as np
 import jax
@@ -15,6 +16,9 @@ import matplotlib.pyplot as plt
 from additional_functions import *
 from checkfreq import *
 import matplotlib.mlab as mlab
+from scipy.stats import ttest_ind, f_oneway
+from dbssyn import *
+from createdbs import *
 
 jax.config.update("jax_enable_x64", True)
 print(jax.devices())
@@ -36,8 +40,16 @@ n_ctx_s1pyr = default_n * 20
 
 
 #%% parameters
+def _make_shifted_weight(n_rows, n_cols, shifts):
+    """Create a sparse circular-connectivity matrix with a few shifted links."""
+    W = np.zeros((n_rows, n_cols), dtype=np.float64)
+    for row in range(n_rows):
+        for shift in shifts:
+            W[row, (row + shift) % n_cols] = 1.0
+    return jnp.array(W, dtype=jnp.float64)
+
 # parameters in a dict (PyTree)
-params = {
+base_params = {
     "pd": 0,
     # membrane params
     # in order of TH, STN, GPe, GPi, Str, CTX (PYR), CTX (FSI) (1e-5, 0.00015)
@@ -69,7 +81,7 @@ params = {
 
     # synapse params ctx (Santiniello, 2019)
     # in order of Ipyr, Ifsi
-    "gsynctx": jnp.array([0.3, 0.3, 1, 1, 0.07, 0.07, 0.3, 0.08, 0.3, 0.3, 0.3, 0.3]),
+    "gsynctx": jnp.array([0.3, 0.3, 1, 1, 0.09, 0.09, 0.3, 0.1, 0.3, 0.3, 0.3, 0.3]),
     "Esynctx": jnp.array([0, -80]),
 
     #thalamic synapses
@@ -84,170 +96,18 @@ params = {
 
     # connectivity matrix
     # 1 : 1 connectivity
-    #"w_gpe_stn": jnp.eye(n_stn, n_gpe),
-    #"w_stn_gpe": jnp.eye(n_gpe, n_stn),
     "w_gpi_th":  jnp.eye(n_th, n_gpi),
-    #"w_gpe_gpi": jnp.eye(n_gpi, n_gpe),
-    #"w_stn_gpi": jnp.eye(n_gpi, n_stn),
     "w_istr_gpe": jnp.eye(n_gpe, n_istr),
     "w_dstr_gpi": jnp.eye(n_gpi, n_dstr),
     "w_gpe_istr": jnp.eye(n_istr, n_gpe),
     "w_gpe_dstr": jnp.eye(n_dstr, n_gpe),
     # 2 : 1 connectivity for self-inhibtion
-    # "w_stn_gpe": jnp.array([
-    #     [1,1,0,0],
-    #     [0,1,1,0],
-    #     [0,0,1,1],
-    #     [1,0,0,1],], dtype=jnp.float64),
-    # "w_stn_gpi": jnp.array([
-    #     [1,1,0,0],
-    #     [0,1,1,0],
-    #     [0,0,1,1],
-    #     [1,0,0,1],], dtype=jnp.float64),
-    "w_gpe_stn": jnp.array([
-       [1,0,0,1],
-       [1,1,0,0],
-       [0,1,1,0],
-       [0,0,1,1],], dtype=jnp.float64),
-    "w_gpe_gpi": jnp.array([
-        [0,0,1,1],
-        [1,0,0,1],
-        [1,1,0,0],
-        [0,1,1,0],], dtype=jnp.float64),
-    # "w_gpe_gpe": jnp.array([
-    #     [0,0,1,1],
-    #     [1,0,0,1],
-    #     [1,1,0,0],
-    #     [0,1,1,0],], dtype=jnp.float64),
+    "w_gpe_stn": _make_shifted_weight(n_gpe, n_stn, (0, -1)),
+    "w_gpe_gpi": _make_shifted_weight(n_gpe, n_gpi, (-1, -2)),
     # 3 : 1 connectivity in direct striatum
-    "w_dstr": jnp.array([
-        [0,1,1,1],
-        [1,0,1,1],
-        [1,1,0,1],
-        [1,1,1,0],], dtype=jnp.float32),
+    "w_dstr": jnp.ones((n_dstr, n_dstr), dtype=jnp.float64) - jnp.eye(n_dstr, dtype=jnp.float64),
     # 4 : 1 connectivity in indirect striatum
-    "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float32),
-    
-    # all-to-all connectivity in FSI-FSI CTX
-    "w_fsi": jnp.ones((n_ctx_fsi, n_ctx_fsi), dtype=jnp.float64) - jnp.eye(n_ctx_fsi, dtype=jnp.float64),
-    # all-to-five connectivity in PYR-PYR CTX
-    "w_pyr": w_matrix_divergent(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_ctx_pyr, k = 5),#w_matrix(n = n_ctx_pyr, k = 1),
-    # all-to-all connectivity in PYR-FSI CTX
-    "w_pyr_fsi": jnp.ones((n_ctx_fsi, n_ctx_pyr), dtype=jnp.float64),
-    # all-to-all connectivity in FSI-PYR CTX
-    "w_fsi_pyr": jnp.ones((n_ctx_pyr, n_ctx_fsi), dtype=jnp.float64),
-    #FOR S1
-    "w_fsis1": jnp.ones((n_ctx_s1fsi, n_ctx_s1fsi), dtype=jnp.float64) - jnp.eye(n_ctx_s1fsi, dtype=jnp.float64),
-    # all-to-five connectivity in PYR-PYR CTX
-    "w_pyrs1": w_matrix_divergent(jax.random.PRNGKey(0), n = n_ctx_s1pyr,p= n_ctx_s1pyr, k = 5),#w_matrix(n = n_ctx_s1pyr, k = 1),
-    # all-to-all connectivity in PYR-FSI CTX
-    "w_pyr_fsis1": jnp.ones((n_ctx_s1fsi, n_ctx_s1pyr), dtype=jnp.float64),
-    # all-to-all connectivity in FSI-PYR CTX
-    "w_fsi_pyrs1": jnp.ones((n_ctx_s1pyr, n_ctx_s1fsi), dtype=jnp.float64),
-    # all-to-all in PYR CTX - Str
-    "w_pyr_str": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_dstr, k = 5),
-    "w_pyr_stn": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_stn, k = 5),
-    "w_pyr_th": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_th, k = 4),
-    "w_pyrs1_th": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_s1pyr,p= n_th, k = 4),
-    #"w_pyr_str":  jnp.ones((n_dstr, n_ctx_pyr), dtype=jnp.float32) * cD1(DA),
-    "w_th_pyr": w_matrix_divergent(jax.random.PRNGKey(0), n = n_th,p= n_ctx_pyr, k = 6),
-    "w_th_fsi": w_matrix_divergent(jax.random.PRNGKey(0), n = n_th,p= n_ctx_fsi, k = 2),
-    "w_m1_s1py": w_matrix_divergent(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_ctx_s1pyr, k = 5),
-    "w_m1_s1fi": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_pyr,p= n_ctx_s1fsi, k = 5),
-    "w_s1_m1py": w_matrix_divergent(jax.random.PRNGKey(0), n = n_ctx_s1pyr,p= n_ctx_pyr, k = 5),
-    "w_s1_m1fi": w_matrix_random(jax.random.PRNGKey(0), n = n_ctx_s1pyr,p= n_ctx_fsi, k = 5)
-}
-
-params_pd = {
-    "pd": 1,
-    # membrane params
-    # in order of TH, STN, GPe, GPi, Str, CTX (PYR), CTX (FSI) (1e-5, 0.00015)
-    "Cm": 1.0,
-    "gl": jnp.array([0.05, 2.25, 0.1, 0.1, 0.1, 0.01, 0.15]),  "El": jnp.array([-70, -60, -65, -65, -67, -85, -70]),
-    "gna": jnp.array([3, 37, 120, 120, 100]), "Ena": jnp.array([50, 55, 55, 55, 50, 50, 50]),
-    "gk": jnp.array([5, 45, 30, 30, 80]),  "Ek": jnp.array([-75, -80, -80, -80, -100, -100, -100]),
-    "gt": jnp.array([5, 0.5, 0.5, 0.5]), "Et":0,
-    "gca": jnp.array([0, 2, 0.15, 0.15]), "Eca": jnp.array([0, 140, 120, 120, 120]),
-    "gahp": jnp.array([0, 20, 10, 10]),
-    "k1": jnp.array([0, 15, 10, 10]),
-    "kca": jnp.array([0, 22.5, 15, 15]),
-    "gm": 1,"Em": -100, # for striatum muscarinic current
-
-    # synapse params (Rubin, 2004)
-    # in order of Igith, Igesn, Isnge, Igege, Igegi, Isngi
-    "A": jnp.array([2.0 , 2.0 , 3.0, 2.0, 2.0, 3.0]),
-    "B": jnp.array([0.04, 0.04, 0.1, 0.04, 0.04, 0.1]),
-    "the": jnp.array([20, 20, 30, 20, 20, 30]),
-    "gsyn": jnp.array([0.08, 1, 0.3, 1, 1, 0.3, 1, 1]),
-    "Esyn": jnp.array([-85, -85, 0, -85, -85, 0, -85, -85]),
-    "tau": 5, "gpeak1": 0.3, "gpeak": 0.43, #parameters for second-order alpha synapse
-
-    # synapse params (Karamavelu, 2004)
-    # in order of Istrstr, Istrge, Istrgi 
-    "gsynstr": jnp.array([0.8, 0.5, 0.5]),
-    "Esynstr": jnp.array([-80, -85, -85]),
-    "ggaba": 0.1, "tau_i": 13,
-
-    # synapse params ctx (Santiniello, 2019)
-    # in order of Ipyr, Ifsi
-    "gsynctx": jnp.array([0.3, 0.3, 1, 1, 0.07, 0.07, 0.3, 0.08, 0.3, 0.3, 0.3, 0.3]),
-    "Esynctx": jnp.array([0, -80]),
-
-    #thalamic synapses
-    "gsynth": jnp.array([0.3]),
-    "Esynth": jnp.array([0]),
-
-    # stdp params
-    "tau_pre": 12.0,
-    "tau_post": 27.5,
-    "tau2_pre": 2,
-    "tau2_post": 4,
-
-    # connectivity matrix
-    # 1 : 1 connectivity
-    #"w_gpe_stn": jnp.eye(n_stn, n_gpe),
-    #"w_stn_gpe": jnp.eye(n_gpe, n_stn),
-    "w_gpi_th":  jnp.eye(n_th, n_gpi),
-    #"w_gpe_gpi": jnp.eye(n_gpi, n_gpe),
-    #"w_stn_gpi": jnp.eye(n_gpi, n_stn),
-    "w_istr_gpe": jnp.eye(n_gpe, n_istr),
-    "w_gpe_istr": jnp.eye(n_istr, n_gpe),
-    "w_gpe_dstr": jnp.eye(n_dstr, n_gpe),
-    "w_dstr_gpi": jnp.eye(n_gpi, n_dstr),
-    # 2 : 1 connectivity for self-inhibtion
-    # "w_stn_gpe": jnp.array([
-    #     [1,1,0,0],
-    #     [0,1,1,0],
-    #     [0,0,1,1],
-    #     [1,0,0,1],], dtype=jnp.float64),
-    # "w_stn_gpi": jnp.array([
-    #     [1,1,0,0],
-    #     [0,1,1,0],
-    #     [0,0,1,1],
-    #     [1,0,0,1],], dtype=jnp.float64),
-    "w_gpe_stn": jnp.array([
-       [1,0,0,1],
-       [1,1,0,0],
-       [0,1,1,0],
-       [0,0,1,1],], dtype=jnp.float64),
-    "w_gpe_gpi": jnp.array([
-        [0,0,1,1],
-        [1,0,0,1],
-        [1,1,0,0],
-        [0,1,1,0],], dtype=jnp.float64),
-    # "w_gpe_gpe": jnp.array([
-    #     [0,0,1,1],
-    #     [1,0,0,1],
-    #     [1,1,0,0],
-    #     [0,1,1,0],], dtype=jnp.float64),
-    # 3 : 1 connectivity in direct striatum
-    "w_dstr": jnp.array([
-        [0,1,1,1],
-        [1,0,1,1],
-        [1,1,0,1],
-        [1,1,1,0],], dtype=jnp.float32),
-    # 4 : 1 connectivity in indirect striatum
-    "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float32),
+    "w_istr": jnp.ones((n_istr, n_istr), dtype=jnp.float64),
     
     # all-to-all connectivity in FSI-FSI CTX
     "w_fsi": jnp.ones((n_ctx_fsi, n_ctx_fsi), dtype=jnp.float64) - jnp.eye(n_ctx_fsi, dtype=jnp.float64),
@@ -389,6 +249,8 @@ def gpe_rhs(t, y, args):
     W2 = y["W2"]
 
     pd   = params["pd"]
+    Idbs_current = params["Idbs_current"]
+    Ivcr_current = params["Ivcr_current"]
     Cm   = params["Cm"]
     gl   = params["gl"];  El   = params["El"]
     gna  = params["gna"]; Ena  = params["Ena"]
@@ -547,6 +409,9 @@ def gpe_rhs(t, y, args):
     tc9 = stn_tauc(V9)
 
 #%% currents gpe_rhs
+    t_idx = jnp.int32(t / dt0) #why?
+    Idbs = Idbs_current[t_idx]
+    Ivcr = Ivcr_current[t_idx]
     # thalamic currents
     Il1  = gl[0]  * (V1 - El[0])
     Ina1 = gna[0] * (m1**3) * H1 * (V1 - Ena[0])
@@ -576,7 +441,7 @@ def gpe_rhs(t, y, args):
     Iahp3 = gahp[2] * (V3 - Ek[2]) * (CA3 / (CA3 + k1[2]))
 
     # applied current gpe
-    Iappgpe = 7 + 5*pd
+    Iappgpe = 8
 
     # currents gpi
     Il4  = gl[3]  * (V4 - El[3])
@@ -587,19 +452,19 @@ def gpe_rhs(t, y, args):
     Iahp4 = gahp[3] * (V4 - Ek[3]) * (CA4 / (CA4 + k1[3]))
 
     # applied current gpi
-    Iappgpi = 15.5
+    Iappgpi = 17.5
 
     # currents str (direct and indirect)
     Ina5d = gna[4] * (m5d**3) * h5d * (V5d - Ena[4])
     Ik5d =  gk[4]  * (n5d**4) * (V5d - Ek[4])
     Il5d =  gl[4]  * (V5d - El[4]) 
-    Im5d = (2.6 - 0.5 *pd) * gm * p5d * (V5d - Em)
+    Im5d = (2.6 - 0.2 *pd) * gm * p5d * (V5d - Em)
     Iappstrd = 0.4
 
     Ina5i = gna[4] * (m5i**3) * h5i * (V5i - Ena[4])
     Ik5i =  gk[4]  * (n5i**4) * (V5i - Ek[4])
     Il5i =  gl[4]  * (V5i - El[4]) 
-    Im5i = (2.6 - 0.5 *pd) * gm * p5i * (V5i - Em)
+    Im5i = (2.6 - 0.2 *pd) * gm * p5i * (V5i - Em)
     Iappstri = 0.6
 
     #currents cortex - like stn
@@ -709,7 +574,11 @@ def gpe_rhs(t, y, args):
         - A_minus * jnp.outer(x_post, pre_spike)
     )
 
-    W_proj = jnp.clip(W + dWdt_raw, 0.0, 1.0)
+    W_proj = jnp.where(
+        w_gpe_stn > 0,
+        jnp.clip(W + dWdt_raw, 0.0, 1.0),
+        0.0,
+    )
     dWdt = W_proj - W 
 
     dW1dt_raw = (
@@ -717,7 +586,11 @@ def gpe_rhs(t, y, args):
         - A_minus * jnp.outer(x1_post, pre_spike1)
     )
 
-    W1_proj = jnp.clip(W1 + dW1dt_raw, 0.0, 1.0)
+    W1_proj = jnp.where(
+        w_gpe_stn > 0,
+        jnp.clip(W1 + dW1dt_raw, 0.0, 1.0),
+        0.0,
+    )
     dW1dt = W1_proj - W1 
 
     dW2dt_raw = (
@@ -727,7 +600,11 @@ def gpe_rhs(t, y, args):
 
     dW2dt_raw = 0.004*dW2dt_raw
 
-    W2_proj = jnp.clip(W2 +dW2dt_raw, 0.0001, 0.6)
+    W2_proj = jnp.where(
+        w_gpe_gpi > 0,
+        jnp.clip(W2 + dW2dt_raw, 0.0001, 0.6),
+        0.0,
+    )
     dW2dt = W2_proj - W2
 
     # str synaptic currents (2nd order alpha synapses)
@@ -753,13 +630,16 @@ def gpe_rhs(t, y, args):
 
     # synaptic currents using those gating variables
     Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4))
-    Igesn = 0.5 *  (gsyn[1] * (V2 - Esyn[1]) * (w_gpe_stn @ S3))
-    Isnge = 0.25 *  (gsyn[2] * (V3 - Esyn[2]) * ( W  @ S2))
+    Igesn = 0.5 *  ((gsyn[1]-0.6*pd) * (V2 - Esyn[1]) * (w_gpe_stn @ S3))
+    masked_W = jnp.where(w_gpe_stn > 0, W, 0.0)
+    Isnge =  0.25*(gsyn[2] * (V3 - Esyn[2]) * ( masked_W  @ S2))
     #Igege = 0.5 *  (gsyn[3] * (V3 - Esyn[3]) *  (w_gpe_gpe @ S3))
-    Igege = 0.25 *  ((3*pd+1)*(gsyn[3]) * (V3 - Esyn[3]) *  (W2 @ S3))
+    masked_W2 = jnp.where(w_gpe_gpi > 0, W2, 0.0)
+    Igege = 0.25 *  ((0.8*pd+gsyn[3]) * (V3 - Esyn[3]) *  (masked_W2 @ S3))
     Igegi = 0.5 *  (gsyn[4] * (V4 - Esyn[4]) *  (w_gpe_gpi @ S3))
     #Isngi = 0.5 *  (gsyn[5] * (V4 - Esyn[5]) *  (w_stn_gpi  @ S2))
-    Isngi = 0.25 *  (gsyn[5] * (V4 - Esyn[5]) *  (W1  @ S2))
+    masked_W1 = jnp.where(w_gpe_stn > 0, W1, 0.0)
+    Isngi =  0.25*((gsyn[5]+0.6*pd) * (V4 - Esyn[5]) *  (masked_W1  @ S2))
     Istrge = gsynstr[1] * (V3 - Esynstr[1]) * (w_istr_gpe  @ S5i_2) # from in FOG: Istrge = 0.1 * ... - why?
     Istrgi = gsynstr[1] * (V4 - Esynstr[1]) * (w_dstr_gpi  @ S5d_2)
     Istrd = (ggaba/3) * (V5d - Esynstr[0]) * (w_dstr @ S5d)
@@ -768,11 +648,11 @@ def gpe_rhs(t, y, args):
     Ipyfi = (1/n_ctx_pyr)*gsynctx[1] * (V7 - Esynctx[0]) * (w_pyr_fsi  @ S6) 
     Ififi = (1/n_ctx_fsi)*gsynctx[2] * (V7 - Esynctx[1]) * (w_fsi  @ S7) 
     Ifipy = (1/n_ctx_fsi)*gsynctx[3] * (V6 - Esynctx[1]) * (w_fsi_pyr  @ S7) 
-    Ipystrd = 0.2*(5*gsynctx[5] -0.25*pd) * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
+    Ipystrd = 0.2*(5*gsynctx[5] -0.3*pd) * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
     Ipystri = 0.2*(5*gsynctx[4]) * (V5i - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
     Ipysn = 0.2*gsynctx[6] * (V2 - Esynctx[0]) * (w_pyr_stn  @ S6)  # check for valid parameters here 
-    Ipyth = 0.5*0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyr_th  @ S6)  # check for valid parameters here 
-    Ipys1th = 0.5*0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyrs1_th  @ S8)  # check for valid parameters here 
+    Ipyth = 0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyr_th  @ S6)  # check for valid parameters here 
+    Ipys1th = 0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyrs1_th  @ S8)  # check for valid parameters here 
     Ithpy = gsynth[0] * (V6 - Esynth[0]) * (w_th_pyr  @ S1)  # check for valid parameters here 
     Ithfi = gsynth[0] * (V7 - Esynth[0]) * (w_th_fsi  @ S1)  # check for valid parameters here 
     Ipypys1 = 0.2*gsynctx[0] * (V8 - Esynctx[0]) * (w_pyrs1  @ S8) # change to normalizing by number of presynaptic input neurons
@@ -793,7 +673,7 @@ def gpe_rhs(t, y, args):
     dR1dt   = (r1 - R1) / tr1
 
     # differential equations stn
-    dV2dt   = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn - Ipysn + Iappstn) / Cm
+    dV2dt   = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn - Ipysn + Iappstn + 5*Idbs) / Cm
     dN2dt   = 0.75 * (n2 - N2) / tn2
     dH2dt   = 0.75 * (h2 - H2) / th2
     dR2dt   = 0.2 * (r2 - R2) / tr2
@@ -843,14 +723,14 @@ def gpe_rhs(t, y, args):
     dC7dt   = 0.08 * (c7 - C7) / tc7
 
     # differential equations CTX S1
-    dV8dt   = (-Il8 - Ik8 - Ina8 - It8 - Ica8 - Iahp8  - Ipypys1 - Ifipys1 - Im1pys1 + Iappctx8) / Cm
+    dV8dt   = (-Il8 - Ik8 - Ina8 - It8 - Ica8 - Iahp8  - Ipypys1 - Ifipys1 - Im1pys1 + Iappctx8 + 5*Ivcr) / Cm
     dN8dt   = 0.75 * (n8 - N8) / tn8
     dH8dt   = 0.75 * (h8 - H8) / th8
     dR8dt   = 0.2 * (r8 - R8) / tr8
     dCA8dt  = 3.75 * 1e-5 * (-Ica8 - It8 - kca[1] * CA8)
     dC8dt   = 0.08 * (c8 - C8) / tc8
 
-    dV9dt   = (-Il9 - Ik9 - Ina9 - It9 - Ica9 - Iahp9 - Ififis1 - Ipyfis1 - Im1fis1 + Iappctx9) / Cm
+    dV9dt   = (-Il9 - Ik9 - Ina9 - It9 - Ica9 - Iahp9 - Ififis1 - Ipyfis1 - Im1fis1 + Iappctx9 + 5*Ivcr) / Cm
     dN9dt   =  0.75 * (n9 - N9) / tn9
     dH9dt   =  0.75 * (h9 - H9) / th9
     dR9dt   = 0.2 * (r9 - R9) / tr9
@@ -1006,10 +886,10 @@ y0 = {
     "CA3_gpe": jnp.full((n_gpe,), 0.1),
     "S3_gpe":  jnp.zeros((n_gpe,)),
 
-    "W": jax.random.uniform(key_w, (n_gpe, n_stn), minval=0.85, maxval=1),
+    "W": jax.random.uniform(key_w, (n_gpe, n_stn), minval=0.85, maxval=1) * base_params["w_gpe_stn"],
     "x_pre": jnp.zeros((n_stn,)),
     "x_post": jnp.zeros((n_gpe,)),
-    "W2": jax.random.uniform(key_w2, (n_gpe, n_gpe), minval=0.45, maxval=0.6),
+    "W2": jax.random.uniform(key_w2, (n_gpe, n_gpe), minval=0.45, maxval=0.6) * base_params["w_gpe_gpi"],
     "x2_pre": jnp.zeros((n_gpe,)),
     "x2_post": jnp.zeros((n_gpe,)),
 
@@ -1021,7 +901,7 @@ y0 = {
     "S4_gpi":  jnp.zeros((n_gpi,)),
     "Z4_gpi":  jnp.zeros((n_gpi,)),
 
-    "W1": jax.random.uniform(key_w1, (n_gpi, n_stn), minval=0.85, maxval=1),
+    "W1": jax.random.uniform(key_w1, (n_gpi, n_stn), minval=0.85, maxval=1) * base_params["w_gpe_stn"],
     "x1_pre": jnp.zeros((n_stn,)),
     "x1_post": jnp.zeros((n_gpi,)),
 
@@ -1075,6 +955,137 @@ y0 = {
     "CA9_ctx": jnp.full((n_ctx_s1fsi,), 0.1),
     "S9_ctx":  jnp.zeros((n_ctx_s1fsi,)),
 }
+
+# keep a base initial state for repeated randomized runs
+base_y0 = dict(y0)
+
+# helper to make a randomized initial condition from a base state
+def make_y0(seed, base_y0):
+    key = jax.random.PRNGKey(seed)
+    keys = jax.random.split(key, 13)
+
+    def noise(init, k):
+        return init + 2.0 * jax.random.normal(k, init.shape)
+
+    def noise_sm(init, k):
+        return init + 0.05 * jax.random.normal(k, init.shape)
+
+    y0_new = dict(base_y0)
+
+    # randomize voltages
+    y0_new["V1_th"]  = noise(base_y0["V1_th"], keys[0])
+    y0_new["V2_stn"] = noise(base_y0["V2_stn"], keys[1])
+    y0_new["V3_gpe"] = noise(base_y0["V3_gpe"], keys[2])
+    y0_new["V4_gpi"] = noise(base_y0["V4_gpi"], keys[3])
+    y0_new["V5_dstr"] = noise(base_y0["V5_dstr"], keys[4])
+    y0_new["V5_istr"] = noise(base_y0["V5_istr"], keys[5])
+    y0_new["V6_ctx"] = noise(base_y0["V6_ctx"], keys[6])
+    y0_new["V7_ctx"] = noise(base_y0["V7_ctx"], keys[7])
+    y0_new["V8_ctx"] = noise(base_y0["V8_ctx"], keys[8])
+    y0_new["V9_ctx"] = noise(base_y0["V9_ctx"], keys[9])
+
+
+    # recompute TH gates
+    y0_new["H1_th"] = th_hinf(y0_new["V1_th"])
+    y0_new["R1_th"] = th_rinf(y0_new["V1_th"])
+
+
+    # recompute STN gates
+    y0_new["N2_stn"] = stn_ninf(y0_new["V2_stn"])
+    y0_new["H2_stn"] = stn_hinf(y0_new["V2_stn"])
+    y0_new["R2_stn"] = stn_rinf(y0_new["V2_stn"])
+    y0_new["C2_stn"] = stn_cinf(y0_new["V2_stn"])
+
+
+    # recompute GPe gates
+    y0_new["N3_gpe"] = gpe_ninf(y0_new["V3_gpe"])
+    y0_new["H3_gpe"] = gpe_hinf(y0_new["V3_gpe"])
+    y0_new["R3_gpe"] = gpe_rinf(y0_new["V3_gpe"])
+
+
+    # recompute GPi gates
+    y0_new["N4_gpi"] = gpe_ninf(y0_new["V4_gpi"])
+    y0_new["H4_gpi"] = gpe_hinf(y0_new["V4_gpi"])
+    y0_new["R4_gpi"] = gpe_rinf(y0_new["V4_gpi"])
+
+
+    # recompute striatum gates
+    V = y0_new["V5_dstr"]
+    y0_new["m5_dstr"] = str_alpham(V)/(str_alpham(V)+str_betam(V))
+    y0_new["h5_dstr"] = str_alphah(V)/(str_alphah(V)+str_betah(V))
+    y0_new["n5_dstr"] = str_alphan(V)/(str_alphan(V)+str_betan(V))
+    y0_new["p5_dstr"] = str_alphap(V)/(str_alphap(V)+str_betap(V))
+
+    V = y0_new["V5_istr"]
+    y0_new["m5_istr"] = str_alpham(V)/(str_alpham(V)+str_betam(V))
+    y0_new["h5_istr"] = str_alphah(V)/(str_alphah(V)+str_betah(V))
+    y0_new["n5_istr"] = str_alphan(V)/(str_alphan(V)+str_betan(V))
+    y0_new["p5_istr"] = str_alphap(V)/(str_alphap(V)+str_betap(V))
+
+
+    # recompute cortex gates
+    y0_new["N6_ctx"] = stn_ninf(y0_new["V6_ctx"])
+    y0_new["H6_ctx"] = stn_hinf(y0_new["V6_ctx"])
+    y0_new["R6_ctx"] = stn_rinf(y0_new["V6_ctx"])
+    y0_new["C6_ctx"] = stn_cinf(y0_new["V6_ctx"])
+
+    y0_new["N7_ctx"] = stn_ninf(y0_new["V7_ctx"])
+    y0_new["H7_ctx"] = stn_hinf(y0_new["V7_ctx"])
+    y0_new["R7_ctx"] = stn_rinf(y0_new["V7_ctx"])
+    y0_new["C7_ctx"] = stn_cinf(y0_new["V7_ctx"])
+
+    y0_new["N8_ctx"] = stn_ninf(y0_new["V8_ctx"])
+    y0_new["H8_ctx"] = stn_hinf(y0_new["V8_ctx"])
+    y0_new["R8_ctx"] = stn_rinf(y0_new["V8_ctx"])
+    y0_new["C8_ctx"] = stn_cinf(y0_new["V8_ctx"])
+
+    y0_new["N9_ctx"] = stn_ninf(y0_new["V9_ctx"])
+    y0_new["H9_ctx"] = stn_hinf(y0_new["V9_ctx"])
+    y0_new["R9_ctx"] = stn_rinf(y0_new["V9_ctx"])
+    y0_new["C9_ctx"] = stn_cinf(y0_new["V9_ctx"])
+
+    y0_new["W"]  = jax.random.uniform(keys[11], shape=base_y0["W"].shape,minval=0.85,maxval=1.0) * base_params["w_gpe_stn"]
+    y0_new["W1"]  = jax.random.uniform(keys[12], shape=base_y0["W1"].shape,minval=0.85,maxval=1.0) * base_params["w_gpe_stn"]
+    y0_new["W2"]  = jax.random.uniform(keys[13], shape=base_y0["W2"].shape,minval=0.45,maxval=0.6) * base_params["w_gpe_gpi"]
+
+    # y0_new["W"]  = noise_sm(base_y0["W"], keys[11])
+    # y0_new["W1"] = noise_sm(base_y0["W1"], keys[12])
+    # y0_new["W2"] = noise_sm(base_y0["W2"], keys[13])
+
+    return y0_new
+
+# compute PSD from a single voltage trace
+def compute_psd(signal):
+    sig = signal - jnp.mean(signal)
+    return jnp.abs(jnp.fft.rfft(sig))
+
+# # run one random initial-condition simulation and return the GPi PSD
+# def run_gpi_psd(seed, params, base_y0):
+#     y0_rand = make_y0(seed, base_y0)
+#     _, _, _, _, V4, _, _, _, _, _, _, _ = simulate_last_chunk_euler(
+#         y0_rand, params, tmax, dt0, dt_save, chunk_size
+#     )
+#     return compute_psd(V4[:, 0])
+
+# # compute mean PSD over multiple random runs in batches
+# def mean_gpi_psd(params, base_y0, n_runs=20, batch_size=5):
+#     seeds = jnp.arange(n_runs)
+#     psd_sum = None
+#     n_done = 0
+
+#     for i in range(0, n_runs, batch_size):
+#         batch_seeds = seeds[i : i + batch_size]
+#         batch_psd = jax.vmap(lambda s: run_gpi_psd(s, params, base_y0))(batch_seeds)
+#         batch_sum = jnp.sum(batch_psd, axis=0)
+
+#         if psd_sum is None:
+#             psd_sum = batch_sum
+#         else:
+#             psd_sum = psd_sum + batch_sum
+
+#         n_done += batch_psd.shape[0]
+
+#     return psd_sum / n_done
 
 #%% chunked Euler solver
 def run_chunk_euler_scan(y0, params, t0, dt,chunk_length):
@@ -1157,75 +1168,326 @@ chunk_size = 1_000.0      # 1 second per chunk
 dt0 = 0.01
 dt_save = 1           # save every 1 ms
 
+def _add_small_idbs_noise(signal, amplitude=0.2, seed=0):
+    """Add a small Gaussian jitter to the DBS waveform without changing its overall shape."""
+    signal = jnp.asarray(signal, dtype=jnp.float64)
+    scale = amplitude * (jnp.max(jnp.abs(signal)) + 1e-8)
+    key = jax.random.PRNGKey(seed)
+    return signal + scale * jax.random.normal(key, shape=signal.shape, dtype=jnp.float64)
 
-ts, V1, V2, V3, V4, V5d, V5i, V6, V7, V8, V9, W, W1, W2 = simulate_last_chunk_euler(y0, params, tmax, dt0, dt_save, chunk_size)
-ts_pd, V1_pd, V2_pd, V3_pd, V4_pd, V5d_pd, V5i_pd, V6_pd, V7_pd, V8_pd, V9_pd, W_pd, W1_pd, W2_pd = simulate_last_chunk_euler(y0, params_pd, tmax, dt0, dt_save, chunk_size)
+Idbs_current = createdbs(
+    f=130,
+    tmax=tmax,
+    dt=dt0
+)
 
+Ivcr_current = createdbs(
+    f=250,
+    tmax=tmax,
+    dt=dt0,
+    sw=2
+)
+
+params = {
+    **base_params,
+    "pd": 0,
+    "dt": dt0,
+    "Idbs_current": jnp.zeros(int(tmax / dt0)),
+    "Ivcr_current": jnp.zeros(int(tmax / dt0))
+}
+
+params_pd = {
+    **base_params,
+    "pd": 1,
+    "dt": dt0,
+    "Idbs_current": jnp.zeros(int(tmax / dt0)),
+    "Ivcr_current": jnp.zeros(int(tmax / dt0))
+}
+
+params_dbs = {
+    **base_params,
+    "pd": 1,
+    "dt": dt0,
+    "Idbs_current": jnp.array(_add_small_idbs_noise(Idbs_current, amplitude=0.02, seed=1)),
+    "Ivcr_current": jnp.zeros(int(tmax / dt0))
+}
+
+params_vcr = {
+    **base_params,
+    "pd": 1,
+    "dt": dt0,
+    "Idbs_current": jnp.zeros(int(tmax / dt0)),
+    "Ivcr_current": jnp.array(_add_small_idbs_noise(Ivcr_current, amplitude=0.02, seed=1))
+}
+
+def run_single_fixed(params):
+    return simulate_last_chunk_euler(
+        y0, params, tmax, dt0, dt_save, chunk_size
+    )
+
+# run a single condition for one fixed initialization
+batched_run = jax.vmap(run_single_fixed)
+
+# parameter conditions batch across all condition sets
+params_batch = jax.tree.map(
+    lambda *xs: jnp.stack(xs),
+    params, params_pd, params_dbs, params_vcr
+)
+
+results = batched_run(params_batch)
+
+condition_names = [
+    "Healthy",
+    "PD",
+    "DBS",
+    "vCR"
+]
+
+# compute a baseline GPi PSD from the batched fixed initialization results
+gpi_fixed_psds = jax.vmap(lambda V4: compute_psd(V4[:, 0]))(results[4])
+
+# compute mean/std GPi PSD over random initial conditions for all 4 conditions
+N_RANDOM_PSD_RUNS = 100
+seeds = jnp.arange(N_RANDOM_PSD_RUNS)
+
+def run_random_gpi_psd(seed, params):
+    y0_rand = make_y0(seed, base_y0)
+    _, _, _, _, V4, _, _, _, _, _, _, _, _, _ = simulate_last_chunk_euler(
+        y0_rand, params, tmax, dt0, dt_save, chunk_size
+    )
+    return compute_psd(V4[:, 0])
+
+# fully parallel across seeds and conditions using a single batched kernel
+@jax.jit
+def compute_random_gpi_psds(seeds, params_batch):
+    return jax.vmap(
+        lambda seed: jax.vmap(
+            lambda params: run_random_gpi_psd(seed, params)
+        )(params_batch)
+    )(seeds)
+
+random_gpi_psds = compute_random_gpi_psds(seeds, params_batch)
+random_gpi_psds_np = np.array(random_gpi_psds)
+
+mean_random_gpi_psds = jnp.mean(random_gpi_psds_np, axis=0)
+std_random_gpi_psds = jnp.std(random_gpi_psds_np, axis=0)
+
+signal_length = results[4][0].shape[0]
+mean_gpi_freqs = np.fft.rfftfreq(signal_length, d= 1e-5)
+
+freq_slice = slice(8, 30)
+window_freqs = mean_gpi_freqs[freq_slice]
+
+plt.figure(figsize=(10, 6))
+for name, mean_psd, std_psd in zip(condition_names, mean_random_gpi_psds, std_random_gpi_psds):
+    mean_psd_np = np.array(mean_psd)[freq_slice]
+    std_psd_np = np.array(std_psd)[freq_slice]
+    plt.plot(window_freqs, mean_psd_np, label=name)
+    plt.fill_between(
+        window_freqs,
+        mean_psd_np - std_psd_np,
+        mean_psd_np + std_psd_np,
+        alpha=0.2,
+    )
+
+plt.xlabel("Frequency (Hz)")
+plt.ylabel("Mean GPi PSD")
+plt.title(f"Mean GPi PSD over {N_RANDOM_PSD_RUNS} random initial-condition runs")
+plt.legend(loc="upper right")
+plt.grid(True, alpha=0.4)
+plt.tight_layout()
+plt.show()
+
+# # filter out 5 Hz harmonics from the same mean PSD traces and plot separately
+# harmonic_base = 5.0
+# notch_width = 0.5
+# max_harmonic = 6
+
+# filtered_mask = np.ones_like(window_freqs, dtype=bool)
+# for k in range(1, max_harmonic + 1):
+#     center = k * harmonic_base
+#     if center < window_freqs[0] or center > window_freqs[-1]:
+#         continue
+#     filtered_mask &= ~(
+#         (window_freqs >= center - notch_width / 2)
+#         & (window_freqs <= center + notch_width / 2)
+#     )
+
+# plt.figure(figsize=(10, 6))
+# for name, mean_psd, std_psd in zip(condition_names, mean_random_gpi_psds, std_random_gpi_psds):
+#     mean_psd_np = np.array(mean_psd)[freq_slice]
+#     std_psd_np = np.array(std_psd)[freq_slice]
+#     mean_psd_filtered = mean_psd_np.copy()
+#     mean_psd_filtered[~filtered_mask] = 0.0
+#     plt.plot(window_freqs, mean_psd_filtered, label=name)
+#     plt.fill_between(
+#         window_freqs,
+#         mean_psd_filtered - std_psd_np,
+#         mean_psd_filtered + std_psd_np,
+#         where=filtered_mask,
+#         alpha=0.2,
+#         interpolate=True,
+#     )
+
+# plt.xlabel("Frequency (Hz)")
+# plt.ylabel("Mean GPi PSD (5 Hz harmonics removed)")
+# plt.title("Mean GPi PSD with 5 Hz harmonics filtered out")
+# plt.legend(loc="upper right")
+# plt.grid(True, alpha=0.4)
+# plt.tight_layout()
+# plt.show()
+
+# statistical comparisons around 17.5 Hz
+freq_center = 17.5
+freq_band = 0.5
+full_freq_mask = (mean_gpi_freqs >= freq_center - freq_band) & (mean_gpi_freqs <= freq_center + freq_band)
+
+band_values = np.mean(random_gpi_psds_np[:, :, full_freq_mask], axis=-1)
+
+p_pd_vs_healthy = ttest_ind(band_values[:, 1], band_values[:, 0], equal_var=False).pvalue
+p_dbs_vs_pd = ttest_ind(band_values[:, 2], band_values[:, 1], equal_var=False).pvalue
+p_vcr_vs_pd = ttest_ind(band_values[:, 3], band_values[:, 1], equal_var=False).pvalue
+
+max_y = np.max([np.max(np.array(mean_psd)[freq_slice]) for mean_psd in mean_random_gpi_psds])
+stat_y_offset = max_y * 0.15
+marker_y = max_y + stat_y_offset
+
+plt.figure(figsize=(10, 6))
+for name, mean_psd, std_psd in zip(condition_names, mean_random_gpi_psds, std_random_gpi_psds):
+    mean_psd_np = np.array(mean_psd)[freq_slice]
+    std_psd_np = np.array(std_psd)[freq_slice]
+    mean_psd_filtered = mean_psd_np.copy()
+    #mean_psd_filtered[~filtered_mask] = 0.0
+    plt.plot(window_freqs, mean_psd_filtered, label=name)
+    plt.fill_between(
+        window_freqs,
+        mean_psd_filtered - std_psd_np,
+        mean_psd_filtered + std_psd_np,
+        where=window_freqs,
+        alpha=0.2,
+        interpolate=True,
+    )
+
+# annotate significance at 17.5 Hz
+if p_pd_vs_healthy < 0.05:
+    plt.scatter([freq_center], [marker_y], color="red", s=100, zorder=10, label="PD vs Healthy p<0.05")
+if p_dbs_vs_pd < 0.05:
+    plt.scatter([freq_center], [marker_y * 0.95], color="black", s=100, zorder=10, label="DBS vs PD p<0.05")
+if p_vcr_vs_pd < 0.05:
+    plt.scatter([freq_center], [marker_y * 0.85], color="blue", s=100, zorder=10, label="vCR vs PD p<0.05")
+plt.text(
+    window_freqs[-1],
+    marker_y * 0.85,
+    (
+        f"17.5 Hz band p-values:\nPD vs Healthy={p_pd_vs_healthy:.3g}, "
+        f"DBS vs PD={p_dbs_vs_pd:.3g}, "
+        f"vCR vs PD={p_vcr_vs_pd:.3g}"
+    ),
+    ha="right",
+    va="top",
+    fontsize=9,
+    bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+)
+
+plt.xlabel("Frequency (Hz)")
+plt.ylabel("Mean GPi PSD")
+plt.title("Mean GPi PSD")
+plt.legend(loc="upper right")
+plt.grid(True, alpha=0.4)
+plt.tight_layout()
+plt.show()
 
 population_voltages = {
-    "TH": V1,
-    "STN": V2,
-    "GPe": V3,
-    "GPi": V4,
-    "dStr": V5d,
-    "iStr": V5i,
-    "PYR M1": V6,
-    "FSI M1": V7,
-    "PYR S1": V8,
-    "FSI S1": V9,
+    "TH": results[1][0],
+    "STN": results[2][0],
+    "GPe": results[3][0],
+    "GPi": results[4][0],
+    "dStr": results[5][0],
+    "iStr": results[6][0],
+    "PYR M1": results[7][0],
+    "FSI M1": results[8][0],
+    "PYR S1": results[9][0],
+    "FSI S1": results[10][0],
 }
 
 population_voltages_pd = {
-    "TH": V1_pd,
-    "STN": V2_pd,
-    "GPe": V3_pd,
-    "GPi": V4_pd,
-    "dStr": V5d_pd,
-    "iStr": V5i_pd,
-    "PYR M1": V6_pd,
-    "FSI M1": V7_pd,
-    "PYR S1": V8_pd,
-    "FSI S1": V9_pd,
+    "TH": results[1][1],
+    "STN": results[2][1],
+    "GPe": results[3][1],
+    "GPi": results[4][1],
+    "dStr": results[5][1],
+    "iStr": results[6][1],
+    "PYR M1": results[7][1],
+    "FSI M1": results[8][1],
+    "PYR S1": results[9][1],
+    "FSI S1": results[10][1],
 }
+
+population_voltages_dbs = {
+    "TH": results[1][2],
+    "STN": results[2][2],
+    "GPe": results[3][2],
+    "GPi": results[4][2],
+    "dStr": results[5][2],
+    "iStr": results[6][2],
+    "PYR M1": results[7][2],
+    "FSI M1": results[8][2],
+    "PYR S1": results[9][2],
+    "FSI S1": results[10][2],
+}
+
+population_voltages_vcr = {
+    "TH": results[1][3],
+    "STN": results[2][3],
+    "GPe": results[3][3],
+    "GPi": results[4][3],
+    "dStr": results[5][3],
+    "iStr": results[6][3],
+    "PYR M1": results[7][3],
+    "FSI M1": results[8][3],
+    "PYR S1": results[9][3],
+    "FSI S1": results[10][3],
+}
+
 
 #%%
 #plot to check = healthy
-plt.plot(ts, V1[:,3])
+plt.plot(results[0][0], results[1][0][:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("TH")
 plt.show()
 
 # plot to check
-plt.plot(ts, V2[:,2])
+plt.plot(results[0][0], results[2][0][:,2])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("STN")
 plt.show()
 
 # plot to check
-plt.plot(ts, V3[:,3])
+plt.plot(results[0][0], results[3][0][:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPe")
 plt.show()
 
 # plot to check
-plt.plot(ts, V4[:,1])
+plt.plot(results[0][0], results[4][0][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPi")
 plt.show()
 
 # plot to check
-plt.plot(ts, V5d[:,0])
+plt.plot(results[0][0], results[5][0][:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("direct Striatum")
 plt.show()
 
 # plot to check
-plt.plot(ts, V5i[:,1])
+plt.plot(results[0][0], results[6][0][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("indirect Striatum")
@@ -1280,43 +1542,44 @@ plt.show()
 # plt.title("W, GPe-GPe")
 # plt.show()
 
+print("-----PD----")
 #plot to check pd
-plt.plot(ts, V1_pd[:,3])
+plt.plot(results[0][0], results[1][1][:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("TH")
 plt.show()
 
 # plot to check
-plt.plot(ts, V2_pd[:,2])
+plt.plot(results[0][0], results[2][1][:,2])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("STN")
 plt.show()
 
 # plot to check
-plt.plot(ts, V3_pd[:,3])
+plt.plot(results[0][0], results[3][1][:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPe")
 plt.show()
 
 # plot to check
-plt.plot(ts, V4_pd[:,1])
+plt.plot(results[0][0], results[4][1][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPi")
 plt.show()
 
 # plot to check
-plt.plot(ts, V5d_pd[:,0])
+plt.plot(results[0][0], results[5][1][:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("direct Striatum")
 plt.show()
 
 # plot to check
-plt.plot(ts, V5i_pd[:,1])
+plt.plot(results[0][0], results[6][1][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("indirect Striatum")
@@ -1372,11 +1635,11 @@ plt.show()
 # plt.show()
 
 # %% model validation
-pop_quest = population_voltages_pd
-volt_quest = V4 #gpi
+pop_quest = population_voltages
+volt_quest = results[4][0] #gpi
 
 #1. mean Hz rate
-results = compute_metrics_all_populations(
+results_met = compute_metrics_all_populations(
     population_voltages=pop_quest,
     dt_ms=dt0,
     spike_height_map={
@@ -1394,7 +1657,7 @@ results = compute_metrics_all_populations(
     refractory_ms=2.0,
 )
 
-mean_rates = {pop: res["mean_rate_hz"] for pop, res in results.items()}
+mean_rates = {pop: res["mean_rate_hz"] for pop, res in results_met.items()}
 
 for pop, rate in mean_rates.items():
     print(f"{pop}: {rate:.3f} Hz")
@@ -1425,7 +1688,7 @@ def plot_population_boxplots(results, population_order=None):
 
 
 plot_population_boxplots(
-    results,
+    results_met,
     population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr"],
 )
 # #%%
@@ -1518,45 +1781,26 @@ plot_irregularity_boxplots(
 
 # %%
 # 3. PSD GPi
-# extract spike times from all neurons in nucleus
-gpi_spike_times = extract_population_spike_times(volt_quest, dt_ms=1.0, spike_height=0.0, refractory_ms=2.0)
+sig1 = results[4][0][:,0]
+sig2 = results[4][1][:,0]
+sig3 = results[4][2][:,0]
+sig4 = results[4][3][:,0]
 
-# calculate rate by computing average spikes per bin
-t_rate, gpi_rate = population_rate_from_spike_times(
-    gpi_spike_times,
-    tmax_ms= tmax,
-    bin_ms= 1.0,
-    n_neurons=n_gpi
-)
+fft_res1 = np.abs(np.fft.rfft(np.fft.ifftshift(sig1-np.mean(sig1))))
+ff_freqs1 = np.fft.rfftfreq(n= sig1.shape[0],d = 1e-5)
+fft_res2 = np.abs(np.fft.rfft(np.fft.ifftshift(sig2-np.mean(sig2))))
+ff_freqs2 = np.fft.rfftfreq(n= sig2.shape[0],d = 1e-5)
+fft_res3 = np.abs(np.fft.rfft(np.fft.ifftshift(sig3-np.mean(sig3))))
+ff_freqs3 = np.fft.rfftfreq(n= sig3.shape[0],d = 1e-5)
+fft_res4 = np.abs(np.fft.rfft(np.fft.ifftshift(sig4-np.mean(sig4))))
+ff_freqs4 = np.fft.rfftfreq(n= sig4.shape[0],d = 1e-5)
 
-# smoothed rate
-gpi_rate_smooth = smooth_rate(gpi_rate, sigma_ms=2.0, bin_ms=1.0)
-
-# Welch PSD
-freqs, psd = welch_psd(
-    gpi_rate_smooth, #check whether rate smoothed or not is better
-    dt_ms=1.0,
-    nperseg=512,
-    noverlap=256
-)
-# plotted
-plt.figure(figsize=(6,4))
-plt.plot(freqs, psd)
-plt.xlim(0, 50)
-plt.xlabel("Frequency (Hz)")
-plt.ylabel("Power")
-plt.title("GPi population-rate PSD (Welch)")
-plt.show()
-
-# plt.figure(figsize=(8,3))
-# plt.plot(t_rate, gpi_rate, label="raw population rate")
-# plt.plot(t_rate, gpi_rate_smooth, label="smoothed population rate")
-# plt.xlabel("Time (ms)")
-# plt.ylabel("Rate (Hz)")
-# plt.title("GPi population rate")
-# plt.legend()
-# plt.show()
-
+plt.figure()
+plt.plot(ff_freqs1[10:30],fft_res1[10:30],label='Healthy')
+plt.plot(ff_freqs2[10:30],fft_res2[10:30],label='PD')
+plt.plot(ff_freqs3[10:30],fft_res3[10:30],label='DBS')
+plt.plot(ff_freqs4[10:30],fft_res4[10:30],label='vCR')
+plt.legend()
 
 
 
