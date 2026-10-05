@@ -68,11 +68,7 @@ def compute_instantaneous_power(data, sfreq, band):
 
 
 def load_and_epoch(filepath, roi_channels, tmin, tmax):
-    """
-    Load preprocessed .fif file, find S1 triggers,
-    and return epochs time-locked to each trigger.
-    """
-
+    
     try:
         raw = mne.io.read_raw_fif(filepath, preload=True, verbose=False)
     except Exception as e:
@@ -152,7 +148,6 @@ def get_beta_timecourse(epochs, band):
 
     return times, pct_change
 
-# Main analysis
 print("\n" + "="*65)
 print("   vCR BURST ANALYSIS — TRIGGER-BASED EPOCHS")
 print("   Session 2  | Hilbert power | Safe baseline")
@@ -310,4 +305,4 @@ print(f"  HB = High beta (21-30 Hz)")
 print(f"  Δ  = post minus pre (% change from baseline)")
 print("\n" + "="*65 + "\n")
 
-# %%
+
