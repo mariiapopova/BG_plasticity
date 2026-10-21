@@ -8,10 +8,11 @@ import os
 
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.chdir(r"/home/mpopova/projects/vCR/BG_plasticity")
 
 import numpy as np
+import random
 import jax
 from jax import jit
 from jax import random
@@ -23,6 +24,7 @@ from additional_functions import *
 from checkfreq import *
 import matplotlib.mlab as mlab
 from dbssyn import *
+from createdbs import *
 
 jax.config.update("jax_enable_x64", True)
 print("JAX backend:", jax.default_backend())
@@ -53,6 +55,8 @@ def _make_shifted_weight(n_rows, n_cols, shifts):
             W[row, (row + shift) % n_cols] = 1.0
     return jnp.array(W, dtype=jnp.float64)
 
+def noise_sm(init, k):
+    return init + 0.5 * jax.random.normal(k, init.shape)
 
 base_params = {
     "pd": 0,
@@ -381,7 +385,7 @@ def gpe_rhs(t, y, args):
     Iahp3 = gahp[2] * (V3 - Ek[2]) * (CA3 / (CA3 + k1[2]))
 
     # applied current gpe
-    Iappgpe = 7#5 #+ 2*pd
+    Iappgpe = 8#5 #+ 2*pd
 
     # currents gpi
     Il4  = gl[3]  * (V4 - El[3])
@@ -392,7 +396,7 @@ def gpe_rhs(t, y, args):
     Iahp4 = gahp[3] * (V4 - Ek[3]) * (CA4 / (CA4 + k1[3]))
 
     # applied current gpi
-    Iappgpi = 15.5#10 #+ 2*pd
+    Iappgpi = 17.5#10 #+ 2*pd
 
     # currents str (direct and indirect)
     Ina5d = gna[4] * (m5d**3) * h5d * (V5d - Ena[4])
@@ -492,7 +496,11 @@ def gpe_rhs(t, y, args):
         - A_minus * jnp.outer(x_post, pre_spike)
     )
 
-    W_proj = jnp.clip(W + dWdt_raw, 0.0, 1.0)
+    W_proj = jnp.where(
+        w_gpe_stn > 0,
+        jnp.clip(W + dWdt_raw, 0.0, 1.0),
+        0.0,
+    )
     dWdt = W_proj - W 
 
     dW1dt_raw = (
@@ -500,7 +508,11 @@ def gpe_rhs(t, y, args):
         - A_minus * jnp.outer(x1_post, pre_spike1)
     )
 
-    W1_proj = jnp.clip(W1 + dW1dt_raw, 0.0, 1.0)
+    W1_proj = jnp.where(
+        w_gpe_stn > 0,
+        jnp.clip(W1 + dW1dt_raw, 0.0, 1.0),
+        0.0,
+    )
     dW1dt = W1_proj - W1 
 
     dW2dt_raw = (
@@ -510,7 +522,11 @@ def gpe_rhs(t, y, args):
 
     dW2dt_raw = 0.004*dW2dt_raw
 
-    W2_proj = jnp.clip(W2 +dW2dt_raw, 0.0001, 0.6)
+    W2_proj = jnp.where(
+        w_gpe_gpi > 0,
+        jnp.clip(W2 + dW2dt_raw, 0.0001, 0.6),
+        0.0,
+    )
     dW2dt = W2_proj - W2
 
     # str synaptic currents (2nd order alpha synapses)
@@ -535,13 +551,16 @@ def gpe_rhs(t, y, args):
     # synaptic currents using those gating variables
     Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4))
     Igesn = 0.5 *  ((gsyn[1]-0.6*pd) * (V2 - Esyn[1]) * (w_gpe_stn @ S3))
-    Isnge =  0.25*(gsyn[2] * (V3 - Esyn[2]) * ( W  @ S2))
+    masked_W = jnp.where(w_gpe_stn > 0, W, 0.0)
+    Isnge =  0.25*(gsyn[2] * (V3 - Esyn[2]) * ( masked_W  @ S2))
     #Igege = 0.5 *  (gsyn[3] * (V3 - Esyn[3]) *  (w_gpe_gpe @ S3))
-    Igege = 0.25 *  ((0.8*pd+gsyn[3]) * (V3 - Esyn[3]) *  (W2 @ S3))
+    masked_W2 = jnp.where(w_gpe_gpi > 0, W2, 0.0)
+    Igege = 0.25 *  ((0.8*pd+gsyn[3]) * (V3 - Esyn[3]) *  (masked_W2 @ S3))
     #Igege=0.5*((gsyn[2]+0.8*pd)*(V3-Esyn[2])*(w_1fin*S3_1+w_2fin*S3_2))
     Igegi = 0.5 *  (gsyn[4] * (V4 - Esyn[4]) *  (w_gpe_gpi @ S3))
     #Isngi = 0.5 *  (gsyn[5] * (V4 - Esyn[5]) *  (w_stn_gpi  @ S2))
-    Isngi =  0.25*((gsyn[5]+0.6*pd) * (V4 - Esyn[5]) *  (W1  @ S2))
+    masked_W1 = jnp.where(w_gpe_stn > 0, W1, 0.0)
+    Isngi =  0.25*((gsyn[5]+0.6*pd) * (V4 - Esyn[5]) *  (masked_W1  @ S2))
     Istrge = gsynstr[1] * (V3 - Esynstr[1]) * (w_istr_gpe  @ S5i_2) # from in FOG: Istrge = 0.1 * ... - why?
     Istrgi = gsynstr[1] * (V4 - Esynstr[1]) * (w_dstr_gpi  @ S5d_2)
     Istrd = (ggaba/3) * (V5d - Esynstr[0]) * (w_dstr @ S5d)
@@ -566,7 +585,7 @@ def gpe_rhs(t, y, args):
     dR1dt   = (r1 - R1) / tr1
 
     # differential equations stn
-    dV2dt   = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn - Ipysn + Iappstn + 15*Idbs) / Cm
+    dV2dt   = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn - Ipysn + Iappstn + 0.5*Idbs) / Cm
     dN2dt   = 0.75 * (n2 - N2) / tn2
     dH2dt   = 0.75 * (h2 - H2) / th2
     dR2dt   = 0.2 * (r2 - R2) / tr2
@@ -808,8 +827,8 @@ def make_y0(seed, base_y0):
     def noise(init, k):
         return init + 2.0 * jax.random.normal(k, init.shape)
 
-    def noise_sm(init, k):
-        return init + 0.05 * jax.random.normal(k, init.shape)
+    # def noise_sm(init, k):
+    #     return init + 0.05 * jax.random.normal(k, init.shape)
 
     y0_new = dict(base_y0)
 
@@ -994,6 +1013,13 @@ tmax = 10_000.0
 chunk_size = 1_000.0      # 1 second per chunk
 dt0 = 0.01
 dt_save = 1           # save every 1 ms
+
+def _add_small_idbs_noise(signal, amplitude=0.2, seed=0):
+    """Add a small Gaussian jitter to the DBS waveform without changing its overall shape."""
+    signal = jnp.asarray(signal, dtype=jnp.float64)
+    scale = amplitude * (jnp.max(jnp.abs(signal)) + 1e-8)
+    key = jax.random.PRNGKey(seed)
+    return signal + scale * jax.random.normal(key, shape=signal.shape, dtype=jnp.float64)
 
 Idbs_current = dbssyn(
     f=130,
@@ -1222,6 +1248,7 @@ band_values = np.mean(random_gpi_psds_np[:, :, full_freq_mask], axis=-1)
 p_pd_vs_healthy = ttest_ind(band_values[:, 1], band_values[:, 0], equal_var=False).pvalue
 p_dbs_vs_pd = ttest_ind(band_values[:, 2], band_values[:, 1], equal_var=False).pvalue
 p_theta_group = f_oneway(
+    band_values[:, 2],
     band_values[:, 3],
     band_values[:, 4],
     band_values[:, 5],
@@ -1528,7 +1555,7 @@ plt.show()
 # plt.show()
 
 # %% model validation
-pop_quest = population_voltages_pd
+pop_quest = population_voltages
 volt_quest = results[4][0] #gpi
 
 #1. mean Hz rate
