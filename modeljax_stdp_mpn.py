@@ -8,7 +8,7 @@ import os
 
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 os.chdir(r"/home/mpopova/projects/vCR/BG_plasticity")
 
 import numpy as np
@@ -34,7 +34,7 @@ print("Available devices:", jax.devices())
 #%%
 # define neuron parameters 
 #number of neurons per nucleus
-default_n = 4
+default_n = 8
 n_th = default_n
 n_stn = default_n
 n_gpe = default_n
@@ -81,6 +81,8 @@ base_params = {
     "gsyn": jnp.array([0.08, 1, 0.3, 1, 1, 0.3, 1, 1]),
     "Esyn": jnp.array([-85, -85, 0, -85, -85, 0, -85, -85]),
     "tau": 5, "gpeak1": 0.3, "gpeak": 0.43, #parameters for second-order alpha synapse
+    # coupling stn
+    "gc1": 0.2, "gc2": 0.2,
 
     # synapse params (Karamavelu, 2004)
     # in order of Istrstr, Istrge, Istrgi 
@@ -157,6 +159,14 @@ def gpe_rhs(t, y, args):
     CA2 = y["CA2_stn"]
     S2  = y["S2_stn"]
     Z2  = y["Z2_stn"]
+
+    # STN eff
+    V2e  = y["V2e_stn"]   
+    N2e  = y["N2e_stn"]
+    H2e  = y["H2e_stn"]
+    R2e  = y["R2e_stn"] 
+    C2e  = y["C2e_stn"]
+    CA2e = y["CA2e_stn"]
 
     # GPe
     V3  = y["V3_gpe"]   
@@ -247,6 +257,9 @@ def gpe_rhs(t, y, args):
     gsynstr = params["gsynstr"]
     Esynstr = params["Esynstr"]
     ggaba = params["ggaba"]; tau_i = params["tau_i"]
+    #STN coupling
+    gc1 = params["gc1"]
+    gc2 = params["gc2"]
 
     gpeak = params["gpeak"]; tau = params["tau"]
     gpeak1 = params["gpeak1"]
@@ -303,6 +316,19 @@ def gpe_rhs(t, y, args):
     tn2  = stn_taun(V2)
     th2  = stn_tauh(V2)
     tc2  = stn_tauc(V2)
+
+    r2e   = stn_rinf(V2e)
+    n2e   = stn_ninf(V2e)
+    m2e   = stn_minf(V2e)
+    h2e   = stn_hinf(V2e)
+    c2e   = stn_cinf(V2e)
+    a2e   = stn_ainf(V2e)
+    b2e   = stn_binf(V2e)
+
+    tr2e  = stn_taur(V2e)
+    tn2e  = stn_taun(V2e)
+    th2e  = stn_tauh(V2e)
+    tc2e  = stn_tauc(V2e)
 
     m3  = gpe_minf(V3)
     n3  = gpe_ninf(V3)
@@ -376,6 +402,18 @@ def gpe_rhs(t, y, args):
     # applied current stn    
     Iappstn = 37 #20
 
+    # efferent current stn
+    Il2e   = gl[1]   * (V2e - El[1])
+    Ik2e   = gk[1]   * (N2e**4) * (V2e - Ek[1])
+    Ina2e  = gna[1]  * (m2e**3) * H2e * (V2e - Ena[1])
+    It2e   = gt[1]   * (a2e**3) * (b2e**2) * (V2e - Eca[1])   
+    Ica2e  = gca[1]  * (c2e**2) * (V2e - Eca[1])
+    Iahp2e = gahp[1] * (V2e - Ek[1]) * (CA2e / (CA2e + k1[1]))
+
+    #coupling currents stn
+    Ic1=gc1*(V2-V2e)
+    Ic2=gc2*(V2e-V2)
+
     # currents gpe
     Il3  = gl[2]  * (V3 - El[2])
     Ik3  = gk[2]  * (N3**4) * (V3 - Ek[2])
@@ -438,7 +476,7 @@ def gpe_rhs(t, y, args):
     # presynaptic activation
     H_th = Hinf(V1, theta=-20.0)
     H_gpe = Hinf(V3, theta=20.0)
-    H_stn = Hinf(V2, theta=30.0)
+    H_stn = Hinf(V2e, theta=30.0)
     H_gpi = Hinf(V4, theta=20.0)
     H_istr = Hinf(V5i, theta=20.0)
     H_dstr = Hinf(V5d, theta=20.0)
@@ -551,6 +589,7 @@ def gpe_rhs(t, y, args):
     # synaptic currents using those gating variables
     Igith = 1.4 *  (gsyn[0] * (V1 - Esyn[0]) * (w_gpi_th @ S4))
     Igesn = 0.5 *  ((gsyn[1]-0.6*pd) * (V2 - Esyn[1]) * (w_gpe_stn @ S3))
+    Igesne = 0.5 *  ((gsyn[1]-0.6*pd) * (V2e - Esyn[1]) * (w_gpe_stn @ S3))
     masked_W = jnp.where(w_gpe_stn > 0, W, 0.0)
     Isnge =  0.25*(gsyn[2] * (V3 - Esyn[2]) * ( masked_W  @ S2))
     #Igege = 0.5 *  (gsyn[3] * (V3 - Esyn[3]) *  (w_gpe_gpe @ S3))
@@ -572,6 +611,7 @@ def gpe_rhs(t, y, args):
     Ipystrd = 0.2*(5*gsynctx[5] -0.3*pd) * (V5d - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
     Ipystri = 0.2*(5*gsynctx[4]) * (V5i - Esynctx[0]) * (w_pyr_str  @ S6)  # check for valid parameters here 
     Ipysn = 0.2*gsynctx[6] * (V2 - Esynctx[0]) * (w_pyr_stn  @ S6)  # check for valid parameters here 
+    Ipysne = 0.2*gsynctx[6] * (V2e - Esynctx[0]) * (w_pyr_stn  @ S6)  # check for valid parameters here 
     Ipyth = 0.25*gsynctx[7] * (V1 - Esynctx[0]) * (w_pyr_th  @ S6)  # check for valid parameters here 
     Ithpy = gsynth[0] * (V6 - Esynth[0]) * (w_th_pyr  @ S1)  # check for valid parameters here 
     Ithfi = gsynth[0] * (V7 - Esynth[0]) * (w_th_fsi  @ S1)  # check for valid parameters here 
@@ -585,12 +625,35 @@ def gpe_rhs(t, y, args):
     dR1dt   = (r1 - R1) / tr1
 
     # differential equations stn
-    dV2dt   = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn - Ipysn + Iappstn + 0.5*Idbs) / Cm
+    #dV2dt   = (-Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2 - Igesn - Ipysn + Iappstn + 0.5*Idbs - Ic1) / Cm
+    ch = (
+        -Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2
+        - Igesn + Iappstn - Ic1
+    ) / Cm
+
+    # Apply your DBS rule
+    condition = (0.01*ch > -40.0) & (Idbs > 10.0)
+
+    I_dbs = jnp.where(condition, 0.0, 0.7 * Idbs)
+
+    # STN voltage equation
+    dV2dt = (
+        -Il2 - Ik2 - Ina2 - It2 - Ica2 - Iahp2
+        - Igesn - Ipysn + Iappstn - Ic1 + I_dbs
+    ) / Cm
     dN2dt   = 0.75 * (n2 - N2) / tn2
     dH2dt   = 0.75 * (h2 - H2) / th2
     dR2dt   = 0.2 * (r2 - R2) / tr2
     dCA2dt  = 3.75 * 1e-5 * (-Ica2 - It2 - kca[1] * CA2)
     dC2dt   = 0.08 * (c2 - C2) / tc2
+
+    # differential equations stn eff
+    dV2edt   = (-Il2e - Ik2e - Ina2e - It2e - Ica2e - Iahp2e - Igesne - Ipysne + Iappstn + 15*Idbs - Ic2) / Cm
+    dN2edt   = 0.75 * (n2e - N2e) / tn2e
+    dH2edt   = 0.75 * (h2e - H2e) / th2e
+    dR2edt   = 0.2 * (r2e - R2e) / tr2e
+    dCA2edt  = 3.75 * 1e-5 * (-Ica2e - It2e - kca[1] * CA2e)
+    dC2edt   = 0.08 * (c2e - C2e) / tc2e
 
     # differential equations gpe
     dV3dt  = (-Il3 - Ik3 - Ina3 - It3 - Ica3 - Iahp3 - Isnge - Igege - Istrge + Iappgpe) / Cm
@@ -648,6 +711,13 @@ def gpe_rhs(t, y, args):
         "CA2_stn": dCA2dt,
         "S2_stn":  dS2dt,
         "Z2_stn":  dZ2dt,
+
+        "V2e_stn":  dV2edt,
+        "N2e_stn":  dN2edt,
+        "H2e_stn":  dH2edt,
+        "R2e_stn":  dR2edt,
+        "C2e_stn":  dC2edt,
+        "CA2e_stn": dCA2edt,
 
         "V3_gpe":  dV3dt,
         "N3_gpe":  dN3dt,
@@ -714,13 +784,14 @@ def gpe_rhs(t, y, args):
 # initial values and params
 key = jax.random.PRNGKey(0)
 (
-    key_v1, key_v2, key_v3, key_v4,
+    key_v1, key_v2, key_v2e, key_v3, key_v4,
     key_v5d, key_v5i, key_v6, key_v7,
     key_w, key_w1, key_w2
-) = jax.random.split(key, 11)
+) = jax.random.split(key, 12)
 
 V1_init = -62
 V2_init = -62
+V2e_init = -62
 V3_init = -62
 V4_init = -62
 V5d_init = -60
@@ -733,6 +804,7 @@ sigma_init = 2.0
 
 V1_0 = V1_init + sigma_init * jax.random.normal(key_v1, (n_th,))
 V2_0 = V2_init + sigma_init * jax.random.normal(key_v2, (n_stn,))
+V2e_0 = V2e_init + sigma_init * jax.random.normal(key_v2e, (n_stn,))
 V3_0 = V3_init + sigma_init * jax.random.normal(key_v3, (n_gpe,))
 V4_0 = V4_init + sigma_init * jax.random.normal(key_v4, (n_gpi,))
 V5d_0 = V5d_init + sigma_init * jax.random.normal(key_v5d, (n_dstr,))
@@ -754,6 +826,13 @@ y0 = {
     "CA2_stn": jnp.full((n_stn,), 0.1),
     "S2_stn":  jnp.zeros((n_stn,)),
     "Z2_stn":  jnp.zeros((n_stn,)),
+
+    "V2e_stn":  V2e_0,
+    "N2e_stn":  stn_ninf(V2e_0),
+    "H2e_stn":  stn_hinf(V2e_0),
+    "R2e_stn":  stn_rinf(V2e_0),
+    "C2e_stn":  stn_cinf(V2e_0),
+    "CA2e_stn": jnp.full((n_stn,), 0.1),
 
     "V3_gpe":  V3_0,
     "N3_gpe":  gpe_ninf(V3_0),
@@ -822,7 +901,7 @@ base_y0 = dict(y0)
 # helper to make a randomized initial condition from a base state
 def make_y0(seed, base_y0):
     key = jax.random.PRNGKey(seed)
-    keys = jax.random.split(key, 11)
+    keys = jax.random.split(key, 12)
 
     def noise(init, k):
         return init + 2.0 * jax.random.normal(k, init.shape)
@@ -835,12 +914,13 @@ def make_y0(seed, base_y0):
     # randomize voltages
     y0_new["V1_th"]  = noise(base_y0["V1_th"], keys[0])
     y0_new["V2_stn"] = noise(base_y0["V2_stn"], keys[1])
-    y0_new["V3_gpe"] = noise(base_y0["V3_gpe"], keys[2])
-    y0_new["V4_gpi"] = noise(base_y0["V4_gpi"], keys[3])
-    y0_new["V5_dstr"] = noise(base_y0["V5_dstr"], keys[4])
-    y0_new["V5_istr"] = noise(base_y0["V5_istr"], keys[5])
-    y0_new["V6_ctx"] = noise(base_y0["V6_ctx"], keys[6])
-    y0_new["V7_ctx"] = noise(base_y0["V7_ctx"], keys[7])
+    y0_new["V2e_stn"] = noise(base_y0["V2e_stn"], keys[2])
+    y0_new["V3_gpe"] = noise(base_y0["V3_gpe"], keys[3])
+    y0_new["V4_gpi"] = noise(base_y0["V4_gpi"], keys[4])
+    y0_new["V5_dstr"] = noise(base_y0["V5_dstr"], keys[5])
+    y0_new["V5_istr"] = noise(base_y0["V5_istr"], keys[6])
+    y0_new["V6_ctx"] = noise(base_y0["V6_ctx"], keys[7])
+    y0_new["V7_ctx"] = noise(base_y0["V7_ctx"], keys[8])
 
 
     # recompute TH gates
@@ -853,6 +933,11 @@ def make_y0(seed, base_y0):
     y0_new["H2_stn"] = stn_hinf(y0_new["V2_stn"])
     y0_new["R2_stn"] = stn_rinf(y0_new["V2_stn"])
     y0_new["C2_stn"] = stn_cinf(y0_new["V2_stn"])
+
+    y0_new["N2e_stn"] = stn_ninf(y0_new["V2e_stn"])
+    y0_new["H2e_stn"] = stn_hinf(y0_new["V2e_stn"])
+    y0_new["R2e_stn"] = stn_rinf(y0_new["V2e_stn"])
+    y0_new["C2e_stn"] = stn_cinf(y0_new["V2e_stn"])
 
 
     # recompute GPe gates
@@ -892,13 +977,13 @@ def make_y0(seed, base_y0):
     y0_new["R7_ctx"] = stn_rinf(y0_new["V7_ctx"])
     y0_new["C7_ctx"] = stn_cinf(y0_new["V7_ctx"])
 
-    y0_new["W"]  = jax.random.uniform(keys[8], shape=base_y0["W"].shape,minval=0.85,maxval=1.0)
-    y0_new["W1"]  = jax.random.uniform(keys[9], shape=base_y0["W1"].shape,minval=0.85,maxval=1.0)
-    y0_new["W2"]  = jax.random.uniform(keys[10], shape=base_y0["W2"].shape,minval=0.45,maxval=0.6)
+    y0_new["W"]  = jax.random.uniform(keys[9], shape=base_y0["W"].shape,minval=0.85,maxval=1.0)
+    y0_new["W1"]  = jax.random.uniform(keys[10], shape=base_y0["W1"].shape,minval=0.85,maxval=1.0)
+    y0_new["W2"]  = jax.random.uniform(keys[11], shape=base_y0["W2"].shape,minval=0.45,maxval=0.6)
 
-    # y0_new["W"]  = noise_sm(base_y0["W"], keys[8])
-    # y0_new["W1"] = noise_sm(base_y0["W1"], keys[9])
-    # y0_new["W2"] = noise_sm(base_y0["W2"], keys[10])
+    # y0_new["W"]  = noise_sm(base_y0["W"], keys[9])
+    # y0_new["W1"] = noise_sm(base_y0["W1"], keys[10])
+    # y0_new["W2"] = noise_sm(base_y0["W2"], keys[11])
 
     return y0_new
 
@@ -997,6 +1082,7 @@ def simulate_last_chunk_euler(
         last_ts,
         last_ys["V1_th"],
         last_ys["V2_stn"],
+        last_ys["V2e_stn"],
         last_ys["V3_gpe"],
         last_ys["V4_gpi"],
         last_ys["V5_dstr"],
@@ -1145,7 +1231,7 @@ condition_names = [
 ]
 
 # compute a baseline GPi PSD from the batched fixed initialization results
-gpi_fixed_psds = jax.vmap(lambda V4: compute_psd(V4[:, 0]))(results[4])
+gpi_fixed_psds = jax.vmap(lambda V4: compute_psd(V4[:, 0]))(results[5])
 
 # compute mean/std GPi PSD over random initial conditions for all 6 conditions
 N_RANDOM_PSD_RUNS = 100
@@ -1153,7 +1239,7 @@ seeds = jnp.arange(N_RANDOM_PSD_RUNS)
 
 def run_random_gpi_psd(seed, params):
     y0_rand = make_y0(seed, base_y0)
-    _, _, _, _, V4, _, _, _, _, _, _, _ = simulate_last_chunk_euler(
+    _, _, _, _, _, V4, _, _, _, _, _, _, _ = simulate_last_chunk_euler(
         y0_rand, params, tmax, dt0, dt_save, chunk_size
     )
     return compute_psd(V4[:, 0])
@@ -1173,7 +1259,7 @@ random_gpi_psds_np = np.array(random_gpi_psds)
 mean_random_gpi_psds = jnp.mean(random_gpi_psds_np, axis=0)
 std_random_gpi_psds = jnp.std(random_gpi_psds_np, axis=0)
 
-signal_length = results[4][0].shape[0]
+signal_length = results[5][0].shape[0]
 mean_gpi_freqs = np.fft.rfftfreq(signal_length, d= 1e-5)
 
 freq_slice = slice(8, 30)
@@ -1307,67 +1393,73 @@ plt.show()
 population_voltages = {
     "TH": results[1][0],
     "STN": results[2][0],
-    "GPe": results[3][0],
-    "GPi": results[4][0],
-    "dStr": results[5][0],
-    "iStr": results[6][0],
-    "PYR M1": results[7][0],
-    "FSI M1": results[8][0],
+    "STNe": results[3][0],
+    "GPe": results[4][0],
+    "GPi": results[5][0],
+    "dStr": results[6][0],
+    "iStr": results[7][0],
+    "PYR M1": results[8][0],
+    "FSI M1": results[9][0],
 }
 
 population_voltages_pd = {
     "TH": results[1][1],
     "STN": results[2][1],
-    "GPe": results[3][1],
-    "GPi": results[4][1],
-    "dStr": results[5][1],
-    "iStr": results[6][1],
-    "PYR M1": results[7][1],
-    "FSI M1": results[8][1],
+    "STNe": results[3][1],
+    "GPe": results[4][1],
+    "GPi": results[5][1],
+    "dStr": results[6][1],
+    "iStr": results[7][1],
+    "PYR M1": results[8][1],
+    "FSI M1": results[9][1],
 }
 
 population_voltages_dbs = {
     "TH": results[1][2],
     "STN": results[2][2],
-    "GPe": results[3][2],
-    "GPi": results[4][2],
-    "dStr": results[5][2],
-    "iStr": results[6][2],
-    "PYR M1": results[7][2],
-    "FSI M1": results[8][2],
+    "STNe": results[3][2],
+    "GPe": results[4][2],
+    "GPi": results[5][2],
+    "dStr": results[6][2],
+    "iStr": results[7][2],
+    "PYR M1": results[8][2],
+    "FSI M1": results[9][2],
 }
 
 population_voltages_dbsthh = {
     "TH": results[1][3],
     "STN": results[2][3],
-    "GPe": results[3][3],
-    "GPi": results[4][3],
-    "dStr": results[5][3],
-    "iStr": results[6][3],
-    "PYR M1": results[7][3],
-    "FSI M1": results[8][3],
+    "STNe": results[3][3],
+    "GPe": results[4][3],
+    "GPi": results[5][3],
+    "dStr": results[6][3],
+    "iStr": results[7][3],
+    "PYR M1": results[8][3],
+    "FSI M1": results[9][3],
 }
 
 population_voltages_dbsthl = {
     "TH": results[1][4],
     "STN": results[2][4],
-    "GPe": results[3][4],
-    "GPi": results[4][4],
-    "dStr": results[5][4],
-    "iStr": results[6][4],
-    "PYR M1": results[7][4],
-    "FSI M1": results[8][4],
+    "STNe": results[3][4],
+    "GPe": results[4][4],
+    "GPi": results[5][4],
+    "dStr": results[6][4],
+    "iStr": results[7][4],
+    "PYR M1": results[8][4],
+    "FSI M1": results[9][4],
 }
 
 population_voltages_dbsthi = {
     "TH": results[1][5],
     "STN": results[2][5],
-    "GPe": results[3][5],
-    "GPi": results[4][5],
-    "dStr": results[5][5],
-    "iStr": results[6][5],
-    "PYR M1": results[7][5],
-    "FSI M1": results[8][5],
+    "STNe": results[3][5],
+    "GPe": results[4][5],
+    "GPi": results[5][5],
+    "dStr": results[6][5],
+    "iStr": results[7][5],
+    "PYR M1": results[8][5],
+    "FSI M1": results[9][5],
 }
 
 #%%
@@ -1386,81 +1478,32 @@ plt.title("STN")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[3][0][:,3])
+plt.plot(results[0][0], results[4][0][:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPe")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[4][0][:,1])
+plt.plot(results[0][0], results[5][0][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPi")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[5][0][:,0])
+plt.plot(results[0][0], results[6][0][:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("direct Striatum")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[6][0][:,1])
+plt.plot(results[0][0], results[7][0][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("indirect Striatum")
 plt.show()
-
-# # plot to check
-# plt.plot(ts, V6[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex M1 (PYR)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, V7[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex M1 (FSI)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, V8[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex S1 (PYR)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, V9[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex S1 (FSI)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, W[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, STN-GPe")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, W1[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, STN-GPi")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, W2[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, GPe-GPe")
-# plt.show()
 
 print("-----PD----")
 #plot to check pd
@@ -1478,85 +1521,36 @@ plt.title("STN")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[3][1][:,3])
+plt.plot(results[0][0], results[4][1][:,3])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPe")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[4][1][:,1])
+plt.plot(results[0][0], results[5][1][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("GPi")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[5][1][:,0])
+plt.plot(results[0][0], results[6][1][:,0])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("direct Striatum")
 plt.show()
 
 # plot to check
-plt.plot(results[0][0], results[6][1][:,1])
+plt.plot(results[0][0], results[7][1][:,1])
 plt.xlabel("t (ms)")
 plt.ylabel("V (mV)")
 plt.title("indirect Striatum")
 plt.show()
 
-# # plot to check
-# plt.plot(ts, V6_pd[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex M1 (PYR)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, V7_pd[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex M1 (FSI)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, V8_pd[:,3])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex S1 (PYR)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, V9_pd[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("Cortex S1 (FSI)")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, W_pd[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, STN-GPe")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, W1_pd[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, STN-GPi")
-# plt.show()
-
-# # plot to check
-# plt.plot(ts, W2_pd[:,1])
-# plt.xlabel("t (ms)")
-# plt.ylabel("V (mV)")
-# plt.title("W, GPe-GPe")
-# plt.show()
-
 # %% model validation
-pop_quest = population_voltages
-volt_quest = results[4][0] #gpi
+pop_quest = population_voltages_dbs
+volt_quest = results[5][0] #gpi
 
 #1. mean Hz rate
 results_met = compute_metrics_all_populations(
@@ -1607,7 +1601,7 @@ def plot_population_boxplots(results, population_order=None):
 
 plot_population_boxplots(
     results_met,
-    population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr"],
+    population_order=["GPe", "STN", "STNe", "GPi", "TH", "PYR M1", "FSI M1", "PYR S1", "FSI S1", "dStr", "iStr"],
 )
 # #%%
 # 2. ISI CV
@@ -1620,6 +1614,7 @@ irregularity_results = compute_irregularity_all_populations(
         "GPi": 0.0,
         "TH": -20.0,
         "STN": 0.0,
+        "STNe": 0.0,
         "PYR M1": 0.0,
         "FSI M1": 0.0,
         "dStr": 0.0,
@@ -1691,18 +1686,18 @@ def plot_irregularity_boxplots(
 
 plot_irregularity_boxplots(
     irregularity_results,
-    population_order=["GPe", "STN", "GPi", "TH", "PYR M1", "FSI M1", "dStr", "iStr"],
+    population_order=["GPe", "STN", "STNe", "GPi", "TH", "PYR M1", "FSI M1", "dStr", "iStr"],
     xlim=(0, 2.5),
 )
 
 # %%
 # 3. PSD GPi
-sig1 = results[4][0][:,0]
-sig2 = results[4][1][:,0]
-sig3 = results[4][2][:,0]
-sig4 = results[4][3][:,0]
-sig5 = results[4][4][:,0]
-sig6 = results[4][5][:,0]
+sig1 = results[5][0][:,0]
+sig2 = results[5][1][:,0]
+sig3 = results[5][2][:,0]
+sig4 = results[5][3][:,0]
+sig5 = results[5][4][:,0]
+sig6 = results[5][5][:,0]
 fft_res1 = np.abs(np.fft.rfft(np.fft.ifftshift(sig1-np.mean(sig1))))
 ff_freqs1 = np.fft.rfftfreq(n= sig1.shape[0],d = 1e-5)
 fft_res2 = np.abs(np.fft.rfft(np.fft.ifftshift(sig2-np.mean(sig2))))
